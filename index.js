@@ -163,14 +163,32 @@ export function apply(ctx) {
         })
         for (const summary of catalog) {
           if (!matchesAny(scope.denySkills, summary.name)) continue
-          // A scoped registration with the same name wins outright in this
-          // Agent's layer; a non-model-invocable entry leaves the catalog.
-          disposers.push(agent.ctx.skills.register({
-            name: summary.name,
-            description: summary.description,
-            content: '',
-            invocation: { modelInvocable: false, userInvocable: false },
-            provider: name,
+          // Copy the whole definition before hiding it.
+          //
+          // A hand-built stub (`content: ''`) is not equivalent: the registry's
+          // `get()` returns the runtime entry verbatim, so a stub would hand the
+          // model an empty skill body on a `/name` invocation, and the shadowed
+          // entry must still satisfy `validateRuntimeSkill`. Measured: the stub
+          // form left the skill fully visible, the copy form hides it.
+          const definition = await skills.get(summary.name, {
+            ...cwd === undefined ? {} : { cwd },
+            scope: agent,
+          })
+          if (definition === undefined) continue
+          const invocation = definition.invocation ?? { modelInvocable: true, userInvocable: true }
+          // Register through THIS Agent's own service instance: `register()`
+          // files into the layer of the context that owns the service, so
+          // `agent.ctx` is the only instance that lands in the agent layer where
+          // it can shadow a preset-registered skill.
+          const scopedSkills = agent.ctx.get('skills')
+          if (scopedSkills === undefined) continue
+          disposers.push(scopedSkills.register({
+            ...definition,
+            invocation: {
+              ...invocation,
+              modelInvocable: false,
+              userInvocable: invocation.userInvocable !== false,
+            },
           }))
         }
       }
