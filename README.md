@@ -73,6 +73,11 @@ depth, so `CLAUDE.md` hides every `CLAUDE.md` while `web/CLAUDE.md` hides one.
 
 These are boundaries of the current Harness extension points, not configuration:
 
+- **Only globally registered tools can be hidden.** `tools.restrict()` masks
+  tools the deployment registers globally; a tool registered inside an Agent
+  preset's own composition (for example the preset's `read_image`, `list_agents`
+  or `get_goal`) is not restrictable from another plugin and stays visible. This
+  was measured, not assumed.
 - **Prompt sections contributed by another plugin cannot be removed** from one
   workspace by a different plugin; sections are scoped to the context that
   registered them. A plugin that contributes only prompt text keeps that text.

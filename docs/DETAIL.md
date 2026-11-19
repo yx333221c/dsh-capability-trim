@@ -90,12 +90,23 @@ Against DSH `0.2.1-rc.2` / Cordis `4.0.5` (Windows, Desktop profile):
 | Clearing the layer restores it | The same Agent could call it again after the state file was emptied |
 | Disabling the plugin restores live Agents | A live subagent went from `unknown tool` to a successful call after the plugin was disabled |
 | The Host route refuses unauthenticated callers | An unauthenticated request answered `401` |
+| Scope is per Agent, not per process | A fresh Agent saw the untrimmed surface while another Agent stayed trimmed |
+| **Only globally registered tools are restrictable** | Denying six tools at once hid `get_screen_metrics` and `desktop_step` (global) while `read_image`, `list_agents`, `get_goal` and `web_search` (registered inside the preset's own scope) stayed callable |
+
+The last row is the important one: `tools.restrict()` accepts only names the
+global view knows. It does not throw for a scoped name — it simply cannot reach
+it. A deployment that registers its tools inside an agent preset therefore has a
+smaller trimmable surface than its tool list suggests.
 
 Pruning of instruction frames is covered by unit tests, not by an end-to-end
 observation in the running GUI.
 
 ## Limits
 
+- **Only globally registered tools can be restricted.** `tools.restrict()` masks
+  tools the deployment registers globally; a tool registered inside an Agent
+  preset's own composition is outside its reach. Hiding its tools is therefore
+  not the same as emptying the tool list — see the measured row above.
 - **A `ctx.systemPrompt.section()` contribution cannot be removed** from one
   workspace by another plugin; sections are scoped to their registering context.
 - **A UI-only plugin has no per-agent seam** to unload: hiding its tools removes

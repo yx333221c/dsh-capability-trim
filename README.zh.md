@@ -59,6 +59,9 @@ $DSH_HOME/capability-trim.json
 
 这些是当前 Harness 扩展点的边界，不是配置问题：
 
+- **只有全局注册的工具才能被隐藏。** `tools.restrict()` 只遮蔽部署层全局注册的工具；在 agent preset 自身
+  组合里注册的工具（例如该 preset 的 `read_image`、`list_agents`、`get_goal`）无法被另一个插件限制，仍然可见。
+  这是实测结论，不是推断。
 - **别的插件用 `ctx.systemPrompt.section()` 注入的提示词段落，无法被第三方插件单独移除**；段落绑定在
   注册它的 context 上。只贡献提示词文本的插件，其文本仍在。
 - **纯界面插件仍然可见**。只有页面或面板的插件，没有 per-agent 的卸载接缝。
