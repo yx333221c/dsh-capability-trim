@@ -1,5 +1,7 @@
 # Capability trim — details
 
+[README](../README.md) · [简体中文](../README.zh.md)
+
 ## What it is
 
 A Harness profile enables plugins process-wide. Every model step re-sends the

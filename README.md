@@ -1,5 +1,7 @@
 # Capability trim
 
+English · [简体中文](README.zh.md)
+
 A tool-heavy profile pays for every plugin in every session. Tool schemas and
 the skill catalog are assembled before each model step, so a project that has
 nothing to do with image generation still carries the image tools in its tool
