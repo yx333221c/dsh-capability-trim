@@ -82,6 +82,15 @@ export function apply(ctx) {
   const installed = new Map()
   /** @type {Set<() => void>} */
   const retired = new Set()
+  /**
+   * Instruction deny lists captured at Agent creation.
+   *
+   * Frozen on purpose: a running task must not have its prompt surface changed
+   * underneath it. Editing a layer affects sessions started afterwards.
+   *
+   * @type {WeakMap<any, string[]>}
+   */
+  const instructionDecisions = new WeakMap()
   const logger = ctx.logger?.(name)
 
   /** Release every scope this plugin installed on live Agents. */
@@ -216,6 +225,11 @@ export function apply(ctx) {
    */
   const applyTo = async agent => {
     uninstall(agent.id)
+    // Freeze this Agent's instruction decision once, at creation. Re-reading it
+    // per step would let a save change a task mid-turn.
+    if (!instructionDecisions.has(agent)) {
+      instructionDecisions.set(agent, [...scopeFor(agent).denyInstructions])
+    }
     const dispose = await install(agent)
     if (dispose !== undefined) installed.set(agent.id, dispose)
   }
@@ -250,13 +264,19 @@ export function apply(ctx) {
   // Instructions are injected as ordinary user messages. This listener runs
   // after the instruction loader has produced its frame and rewrites only the
   // frames whose source is that producer, so nothing else in the step moves.
+  //
+  // The deny list is captured when the Agent is created and kept for its whole
+  // life. Re-reading the saved state every step made the surface change under a
+  // running task, which is the wrong trade: a turn's tools should not be decided
+  // halfway through the turn. Editing a layer therefore affects the next session,
+  // not the one already answering.
   ctx.on('agent/pre-step', async (payload, next) => {
     const decision = await next()
     if (decision.kind === 'reject') return decision
     if (!ready) return decision
 
-    const trim = scopeFor(payload.agent)
-    if (trim.denyInstructions.length === 0) return decision
+    const frozen = instructionDecisions.get(payload.agent)
+    if (frozen === undefined || frozen.length === 0) return decision
 
     let anyChanged = false
     const messages = decision.messages.map(message => {
@@ -268,7 +288,7 @@ export function apply(ctx) {
           blocks.push(block)
           continue
         }
-        const pruned = pruneInstructionFrame(block.text, trim.denyInstructions)
+        const pruned = pruneInstructionFrame(block.text, frozen)
         if (pruned.removed.length === 0) {
           blocks.push(block)
           continue

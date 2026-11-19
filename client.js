@@ -167,8 +167,11 @@ window.__ModuleLoader__.load({
         skills: zh ? '技能' : 'Skills',
         instructions: zh ? '指令文件' : 'Instruction files',
         filterTools: zh ? '筛选工具…' : 'Filter tools…',
+        filterSkills: zh ? '筛选技能…' : 'Filter skills…',
         noTool: zh ? '没有可用的工具。' : 'No tool is available.',
         noToolMatch: zh ? '没有工具匹配该筛选。' : 'No tool matches this filter.',
+        noSkillMatch: zh ? '没有技能匹配该筛选。' : 'No skill matches this filter.',
+        close: zh ? '关闭' : 'Close',
         noSkill: zh ? '没有可被模型调用的技能。' : 'No model-invocable skill is registered.',
         noInstruction: zh ? '这个工作区里没有找到指令文件。' : 'No instruction file was found in this workspace.',
         skillError: zh ? '技能发现失败' : 'Skill discovery failed',
@@ -231,16 +234,20 @@ window.__ModuleLoader__.load({
      * The shared editor. `scope` is the layer being edited; `onToggle` writes one
      * change straight through, so there is no save step.
      */
-    function TrimEditor({ scope, onToggle, state, strings, lead }) {
-      const [filter, setFilter] = useState('')
+    function TrimEditor({ scope, onToggle, state, strings, lead, fills }) {
+      const [toolFilter, setToolFilter] = useState('')
+      const [skillFilter, setSkillFilter] = useState('')
       const [expanded, setExpanded] = useState(false)
 
       const tools = state?.tools ?? []
       const skills = state?.skills ?? []
       const instructions = state?.instructions ?? []
-      const filteredTools = filter === ''
+      const filteredTools = toolFilter === ''
         ? tools
-        : tools.filter(name => name.toLowerCase().includes(filter.toLowerCase()))
+        : tools.filter(name => name.toLowerCase().includes(toolFilter.toLowerCase()))
+      const filteredSkills = skillFilter === ''
+        ? skills
+        : skills.filter(skill => skill.name.toLowerCase().includes(skillFilter.toLowerCase()))
       // The count is per category: a badge over the tool list must not report a
       // hidden skill, which is what made "1 hidden" appear with every tool on.
       const hiddenTools = tools.filter(name => matchesAny(scope.denyTools, name)).length
@@ -250,62 +257,68 @@ window.__ModuleLoader__.load({
       const boxHeight = expanded ? 460 : 190
       const listStyle = { ...S.listBox, maxHeight: boxHeight }
 
+      /**
+       * One capability section: title, count, filter, expand toggle, and rows.
+       *
+       * Every section uses the same header composition so the controls sit right
+       * after their own title. Previously skills put them at the row end, which
+       * read as belonging to the next section.
+       */
+      const section = (title, badge, filter, setFilter, placeholder, body) => h('section', { style: S.card },
+        h('div', { style: S.headRow },
+          h('h3', { style: { ...S.title, flex: '0 0 auto' } }, title),
+          h('span', { style: S.badge }, badge),
+          h('input', {
+            type: 'search', value: filter, placeholder, style: S.search,
+            onChange: event => setFilter(event.target.value),
+          }),
+          h('button', {
+            type: 'button', style: S.smallButton,
+            onClick: () => setExpanded(value => !value),
+            title: expanded ? strings.collapse : strings.expand,
+          }, expanded ? strings.collapse : strings.expand)),
+        body)
+
       const list = (items, field, keyOf, hiddenOf) => h('div', { style: listStyle },
         items.map(item => {
           const key = keyOf(item)
-          const enabled = !hiddenOf(key)
           return h('div', { key, style: S.row, className: 'ct-row' },
             h('span', { style: S.mono, title: key }, key),
             h(Switch, {
-              checked: enabled,
+              checked: !hiddenOf(key),
               label: key,
               onChange: value => onToggle(field, key, value),
             }))
         }))
 
-      return h('div', { style: S.page, className: ROOT_CLASS },
+      const badgeFor = count => (count === 0 ? strings.allOn : `${count} ${strings.hidden}`)
+
+      return h('div', { style: { ...S.page, ...(fills === true ? {} : {}) }, className: ROOT_CLASS },
         h('style', null, STYLE_TEXT),
         h('div', { style: S.scroll },
           lead === undefined ? null : h('p', { style: S.lead }, lead),
 
-          h('section', { style: S.card },
-            h('div', { style: S.headRow },
-              h('h3', { style: { ...S.title, margin: 0, flex: '0 0 auto' } }, strings.tools),
-              h('span', { style: S.badge }, hiddenTools === 0 ? strings.allOn : `${hiddenTools} ${strings.hidden}`),
-              h('input', {
-                type: 'search', value: filter, placeholder: strings.filterTools, style: S.search,
-                onChange: event => setFilter(event.target.value),
-              }),
-              h('button', {
-                type: 'button', style: S.smallButton,
-                onClick: () => setExpanded(value => !value),
-                title: expanded ? strings.collapse : strings.expand,
-              }, expanded ? strings.collapse : strings.expand)),
+          section(strings.tools, badgeFor(hiddenTools), toolFilter, setToolFilter, strings.filterTools,
             filteredTools.length === 0
               ? h('p', { style: S.muted }, tools.length === 0 ? strings.noTool : strings.noToolMatch)
-              : list(filteredTools, 'denyTools', name => name, name => matchesAny(scope.denyTools, name)),
-            h('p', { style: S.muted }, strings.toolLimit)),
+              : h(React.Fragment, null,
+                list(filteredTools, 'denyTools', name => name, name => matchesAny(scope.denyTools, name)),
+                h('p', { style: S.muted }, strings.toolLimit))),
 
-          h('section', { style: S.card },
-            h('div', { style: S.headRow },
-              h('h3', { style: { ...S.title, margin: 0, flex: '1 1 auto' } }, strings.skills),
-              h('span', { style: S.badge }, hiddenSkills === 0 ? strings.allOn : `${hiddenSkills} ${strings.hidden}`),
-              h('button', {
-                type: 'button', style: S.smallButton,
-                onClick: () => setExpanded(value => !value),
-                title: expanded ? strings.collapse : strings.expand,
-              }, expanded ? strings.collapse : strings.expand)),
+          section(strings.skills, badgeFor(hiddenSkills), skillFilter, setSkillFilter, strings.filterSkills,
             state?.skillError === undefined
               ? null
               : h('p', { style: S.error }, `${strings.skillError}: ${state.skillError}`),
             skills.length === 0
               ? h('p', { style: S.muted }, strings.noSkill)
-              : list(skills, 'denySkills', skill => skill.name, name => matchesAny(scope.denySkills, name))),
+              : filteredSkills.length === 0
+                ? h('p', { style: S.muted }, strings.noSkillMatch)
+                : list(filteredSkills, 'denySkills', skill => skill.name, name => matchesAny(scope.denySkills, name))),
 
           h('section', { style: S.card },
             h('div', { style: S.headRow },
-              h('h3', { style: { ...S.title, margin: 0, flex: '1 1 auto' } }, strings.instructions),
-              h('span', { style: S.badge }, hiddenInstructions === 0 ? strings.allOn : `${hiddenInstructions} ${strings.hidden}`)),
+              h('h3', { style: { ...S.title, flex: '0 0 auto' } }, strings.instructions),
+              h('span', { style: S.badge }, badgeFor(hiddenInstructions))),
             instructions.length === 0
               ? h('p', { style: S.muted }, strings.noInstruction)
               : list(instructions, 'denyInstructions', file => file.path, path => deniesInstruction(scope.denyInstructions, path)))),
@@ -320,9 +333,10 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('')
       const [busy, setBusy] = useState(false)
 
-      const reload = useCallback(async () => {
+      const reload = useCallback(async (focus) => {
+        const target = focus === undefined ? cwd : focus
         try {
-          const data = await readStateWithRetry(cwd)
+          const data = await readStateWithRetry(target)
           setState(data)
           setGlobalScope(asScope(data.global))
           const byPath = {}
@@ -425,7 +439,18 @@ window.__ModuleLoader__.load({
         // Nothing to configure for a Session without a directory.
         if (cwd === undefined) return null
 
-        const openModal = () => { void trim.reload(); setOpen(true) }
+        /**
+         * Fetch the surface for THIS workspace before opening.
+         *
+         * The first load has no cwd — the workspace directory is only known once
+         * the state names it — so the Host answered for its deployment fallback,
+         * where no AGENTS.md exists. Re-reading with the resolved path is what
+         * makes the instruction list and the skill catalog match this project.
+         */
+        const openModal = () => {
+          void trim.reload(cwd)
+          setOpen(true)
+        }
 
         return h(React.Fragment, null,
           h('button', {
@@ -436,64 +461,118 @@ window.__ModuleLoader__.load({
             style: S.trigger,
           }, h('span', { 'aria-hidden': true }, '◧'), h('span', null, strings.workspaceShort)),
 
-          open ? h('div', {
-            role: 'dialog',
-            'aria-modal': true,
-            'aria-label': strings.workspace,
-            // A true modal: the backdrop swallows pointer and wheel events so the
-            // conversation behind it cannot scroll, select, or overlap the panel.
-            onClick: event => { event.stopPropagation() },
-            onWheel: event => { event.stopPropagation() },
-            onKeyDown: event => {
-              if (event.key === 'Escape') setOpen(false)
-              event.stopPropagation()
-            },
-            style: {
-              position: 'fixed', inset: 0, zIndex: 9999,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: 'rgba(0,0,0,0.62)', padding: 20,
-              overscrollBehavior: 'contain',
-            },
-          }, h('div', {
-            className: ROOT_CLASS,
-            style: {
-              width: 'min(860px, 100%)', maxHeight: '85vh', borderRadius: 12,
-              border: '1px solid var(--dsw-alias-border-strong)',
-              background: 'var(--dsw-alias-bg-base, var(--dsw-alias-bg-elevated))',
-              boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
-              display: 'flex', flexDirection: 'column', minHeight: 0,
-            },
+          open ? h(Modal, {
+            title: strings.workspace,
+            subtitle: cwd,
+            closeLabel: strings.close,
+            onClose: () => setOpen(false),
           },
-            h('div', {
-              style: {
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                gap: 10, padding: '10px 14px',
-                borderBottom: '1px solid var(--dsw-alias-border-subtle)',
-              },
-            },
-              h('div', { style: { minWidth: 0 } },
-                h('div', { style: { fontSize: 14, fontWeight: 600 } }, strings.workspace),
-                h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: cwd }, cwd)),
-              h('button', {
-                type: 'button',
-                onClick: () => setOpen(false),
-                style: { ...S.trigger, padding: '2px 9px', fontSize: 13 },
-              }, '✕')),
-            h('div', { style: { flex: '1 1 auto', minHeight: 0, display: 'flex' } },
-              trim.state === null
-                ? h('p', { style: { ...S.muted, padding: 16 } }, trim.error !== '' ? trim.error : strings.loading)
-                : h(TrimEditor, {
-                  scope: workspaceScope,
-                  onToggle,
-                  state: trim.state,
-                  strings,
-                  lead: strings.workspaceLead,
-                }))))
+            trim.state === null
+              ? h('p', { style: { ...S.muted, padding: 16 } }, trim.error !== '' ? trim.error : strings.loading)
+              : h(TrimEditor, {
+                scope: workspaceScope,
+                onToggle,
+                state: trim.state,
+                strings,
+                lead: strings.workspaceLead,
+                fills: true,
+              }))
           : null)
       }
     }
 
-    /** The sidebar panel icon. */
+    /**
+     * A centred modal dialog, matching the shape of the app's own Settings
+     * window: dim backdrop, titled header with a close button, and a body that
+     * scrolls on its own.
+     *
+     * The backdrop is a full-viewport layer that swallows pointer, wheel and key
+     * events. Without that, wheel scrolling fell through to the conversation
+     * behind the dialog, which is what produced the stray scrolling and the
+     * overlapping text.
+     */
+    function Modal({ title, subtitle, closeLabel, onClose, children }) {
+      useEffect(() => {
+        const onKey = event => {
+          if (event.key === 'Escape') {
+            event.stopPropagation()
+            onClose()
+          }
+        }
+        // Capture phase: the app's own key handling must not see Escape first.
+        document.addEventListener('keydown', onKey, true)
+        const previous = document.body.style.overflow
+        document.body.style.overflow = 'hidden'
+        return () => {
+          document.removeEventListener('keydown', onKey, true)
+          document.body.style.overflow = previous
+        }
+      }, [onClose])
+
+      const stop = event => { event.stopPropagation() }
+
+      return h('div', {
+        role: 'dialog',
+        'aria-modal': true,
+        'aria-label': title,
+        onClick: event => { if (event.target === event.currentTarget) onClose() },
+        onWheel: stop,
+        onTouchMove: stop,
+        className: ROOT_CLASS,
+        style: {
+          position: 'fixed', inset: 0, zIndex: 9999,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0,0,0,0.55)', padding: '5vh 24px',
+          overscrollBehavior: 'contain',
+        },
+      }, h('div', {
+        style: {
+          width: 'min(880px, 100%)', maxHeight: '88vh',
+          display: 'flex', flexDirection: 'column', minHeight: 0,
+          borderRadius: 14,
+          border: '1px solid var(--dsw-alias-border-strong)',
+          background: 'var(--dsw-alias-bg-elevated)',
+          boxShadow: '0 24px 64px rgba(0,0,0,0.55)',
+          overflow: 'hidden',
+        },
+      },
+        h('div', {
+          style: {
+            flex: '0 0 auto',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: 12, padding: '12px 16px',
+            borderBottom: '1px solid var(--dsw-alias-border-subtle)',
+          },
+        },
+          h('div', { style: { minWidth: 0 } },
+            h('div', { style: { fontSize: 15, fontWeight: 600 } }, title),
+            subtitle === undefined
+              ? null
+              : h('div', {
+                title: subtitle,
+                style: {
+                  fontSize: 11, marginTop: 2,
+                  color: 'var(--dsw-alias-text-tertiary)',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                },
+              }, subtitle)),
+          h('button', {
+            type: 'button',
+            'aria-label': closeLabel,
+            title: closeLabel,
+            onClick: onClose,
+            style: {
+              flex: '0 0 auto', padding: '3px 10px', borderRadius: 8, font: 'inherit',
+              fontSize: 13, cursor: 'pointer', lineHeight: 1.4,
+              border: '1px solid var(--dsw-alias-border-strong)',
+              background: 'transparent', color: 'var(--dsw-alias-text-secondary)',
+            },
+          }, '✕')),
+        h('div', {
+          style: { flex: '1 1 auto', minHeight: 0, display: 'flex', overflow: 'hidden' },
+        }, children)))
+    }
+
     function PanelIcon() {
       return h('svg', {
         viewBox: '0 0 24 24', width: 18, height: 18, 'aria-hidden': true,
