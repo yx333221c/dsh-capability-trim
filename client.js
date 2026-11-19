@@ -193,6 +193,8 @@ window.__ModuleLoader__.load({
       },
       title: { margin: '0 0 8px', fontSize: 12, fontWeight: 600, letterSpacing: '0.02em', textTransform: 'uppercase', color: 'var(--dsw-alias-text-secondary)' },
       subtitleRow: { display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', marginBottom: 8 },
+      showing: { margin: '0 0 2px', fontSize: 12, color: 'var(--dsw-alias-text-secondary)' },
+      headActions: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
       toggleRow: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 },
       check: { display: 'flex', alignItems: 'flex-start', gap: 8, padding: '4px 6px', borderRadius: 6, fontSize: 13, cursor: 'pointer' },
       mono: { fontFamily: 'var(--dsw-alias-font-mono, monospace)', fontSize: 12, wordBreak: 'break-all' },
@@ -206,7 +208,7 @@ window.__ModuleLoader__.load({
       },
       primary: { background: 'var(--dsw-alias-accent-fill, #1f6feb)', borderColor: 'transparent', color: '#fff', fontWeight: 600 },
       search: {
-        flex: '1 1 140px', minWidth: 110, padding: '5px 10px', borderRadius: 8, fontSize: 13,
+        width: 160, flex: '0 0 auto', padding: '4px 10px', borderRadius: 8, fontSize: 13,
         border: '1px solid var(--dsw-alias-border-strong)', background: 'transparent',
         color: 'var(--dsw-alias-text-primary)',
       },
@@ -232,6 +234,8 @@ window.__ModuleLoader__.load({
         hiddenIn: zh ? '本层隐藏的能力' : 'Hidden in this layer',
         showing: zh ? '当前正在配置' : 'Editing',
         nothingHidden: zh ? '本层未隐藏任何能力' : 'nothing hidden in this layer',
+        appliesTo: zh ? '同时写入' : 'also writes',
+        workspaces: zh ? '个工作区' : 'workspaces',
         hidden: zh ? '已隐藏' : 'hidden',
         clearLayer: zh ? '清空本层' : 'Clear this layer',
         save: zh ? '保存并应用' : 'Save and apply',
@@ -284,8 +288,11 @@ window.__ModuleLoader__.load({
     /**
      * The shared editor: a wrapped chip row for layers, one full-width card, and
      * a footer that never scrolls away.
+     *
+     * `multiSelect` makes the layer row additive: clicking a chip adds or removes
+     * it, so a global edit can be applied to several workspaces at once.
      */
-    function TrimEditor({ layer, setLayer, layers, state, scope, onScope, onSave, busy, error, notice, strings }) {
+    function TrimEditor({ layer, setLayer, layers, state, scope, onScope, onSave, busy, error, notice, strings, multiSelect, selected, onToggleLayer }) {
       const [filter, setFilter] = useState('')
 
       const tools = state?.tools ?? []
@@ -296,6 +303,9 @@ window.__ModuleLoader__.load({
         : tools.filter(name => name.toLowerCase().includes(filter.toLowerCase()))
       const hidden = countOf(scope)
       const current = layers.find(entry => entry.id === layer)
+      const isOn = entry => multiSelect === true
+        ? (selected !== undefined && selected.has(entry.id))
+        : entry.id === layer
 
       return h('div', { style: S.page, className: ROOT_CLASS },
         h('style', null, STYLE_TEXT),
@@ -308,46 +318,48 @@ window.__ModuleLoader__.load({
               key: entry.id,
               type: 'button',
               className: 'ct-chip',
-              'data-active': entry.id === layer ? 'true' : 'false',
-              'aria-pressed': entry.id === layer,
+              'data-active': isOn(entry) ? 'true' : 'false',
+              'aria-pressed': isOn(entry),
               title: entry.hint,
               // Selection is expressed inline, not only through the class rule:
               // the inline style object wins over the stylesheet, so a
               // class-only active state would never paint.
-              style: entry.id === layer ? { ...S.chip, ...S.chipActive } : S.chip,
-              onClick: () => setLayer(entry.id),
+              style: isOn(entry) ? { ...S.chip, ...S.chipActive } : S.chip,
+              onClick: () => (multiSelect === true ? onToggleLayer(entry.id) : setLayer(entry.id)),
             },
-              h('span', { 'aria-hidden': true, style: { fontSize: 12, lineHeight: 1, opacity: entry.id === layer ? 1 : 0 } }, '✓'),
+              h('span', { 'aria-hidden': true, style: { fontSize: 12, lineHeight: 1, opacity: isOn(entry) ? 1 : 0 } }, '✓'),
               h('span', { style: S.chipLabel }, entry.label),
               entry.count > 0 ? h('span', { style: S.badge }, String(entry.count)) : null))),
+
+          // Which layer the checklist below is editing. Stated for every surface,
+          // including the global one, so the page is never ambiguous.
+          h('p', { style: S.showing },
+            h('strong', { style: { fontWeight: 600 } }, strings.showing),
+            ': ',
+            current === undefined ? '—' : current.label,
+            hidden === 0 ? ` · ${strings.nothingHidden}` : ` · ${hidden} ${strings.hidden}`,
+            multiSelect === true && selected !== undefined && selected.size > 1
+              ? ` · ${strings.appliesTo} ${selected.size - 1} ${selected.size - 1 === 1 ? strings.workspace.toLowerCase() : strings.workspaces.toLowerCase()}`
+              : ''),
 
           current !== undefined && current.hint !== undefined
             ? h('p', { style: S.path, title: current.hint }, current.hint)
             : null,
 
-          h('p', { style: S.path },
-            `${strings.showing}: ${current === undefined ? '—' : current.label}`,
-            hidden === 0
-              ? ` · ${strings.nothingHidden}`
-              : ` · ${[scope.denyTools.length !== 0 ? `${scope.denyTools.length} ${strings.tools.toLowerCase()}` : '',
-                scope.denySkills.length !== 0 ? `${scope.denySkills.length} ${strings.skills.toLowerCase()}` : '',
-                scope.denyInstructions.length !== 0 ? `${scope.denyInstructions.length} ${strings.instructions.toLowerCase()}` : '']
-                .filter(Boolean).join(', ')}`),
-
           h('section', { style: S.card },
             h('div', { style: S.subtitleRow },
               h('h3', { style: { ...S.title, margin: 0 } }, strings.hiddenIn),
-              h('span', { style: S.badge }, `${hidden} ${strings.hidden}`)),
-
-            h('div', { style: S.toggleRow },
-              h('input', {
-                type: 'search', value: filter, placeholder: strings.filterTools, style: S.search,
-                onChange: event => setFilter(event.target.value),
-              }),
-              h('button', {
-                type: 'button', style: S.button, disabled: hidden === 0,
-                onClick: () => onScope({ ...EMPTY }),
-              }, strings.clearLayer)),
+              // Search and Clear share the header row instead of stretching a
+              // search field across the full width, which left a large gap.
+              h('div', { style: S.headActions },
+                h('input', {
+                  type: 'search', value: filter, placeholder: strings.filterTools, style: S.search,
+                  onChange: event => setFilter(event.target.value),
+                }),
+                h('button', {
+                  type: 'button', style: S.button, disabled: hidden === 0,
+                  onClick: () => onScope({ ...EMPTY }),
+                }, strings.clearLayer))),
 
             h('h4', { style: S.title }, `${strings.tools} (${filteredTools.length})`),
             filteredTools.length === 0
@@ -453,8 +465,17 @@ window.__ModuleLoader__.load({
         const strings = useStrings(locale)
         const trim = useTrim(undefined)
         const [layer, setLayer] = useState('global')
+        /**
+         * Workspaces the current edit is applied to alongside the global layer.
+         *
+         * A click toggles, so clicking a selected workspace deselects it — the
+         * additive behaviour users expect from a multi-select. Editing the global
+         * layer with workspaces selected writes the same checklist to each of
+         * them, which is how one policy reaches several projects at once.
+         */
+        const [selected, setSelected] = useState([])
 
-        const layers = useMemo(() => [
+        const allLayers = useMemo(() => [
           { id: 'global', label: strings.global, hint: strings.globalHint, count: countOf(trim.globalScope) },
           ...(trim.state?.workspaces ?? []).map(workspace => ({
             id: workspace.path,
@@ -464,13 +485,35 @@ window.__ModuleLoader__.load({
           })),
         ], [strings.global, strings.globalHint, trim.state, trim.globalScope, trim.workspaces])
 
-        // Fall back to a layer that exists, so a deleted workspace or a changed
-        // selection can never leave the page bound to nothing.
-        const active = layers.some(entry => entry.id === layer) ? layer : 'global'
-        const scope = active === 'global' ? trim.globalScope : asScope(trim.workspaces[active])
+        // Keep only selections that still exist, so a deleted workspace cannot
+        // linger as an invisible target.
+        const liveSelected = useMemo(() => {
+          const ids = new Set(allLayers.map(entry => entry.id))
+          return selected.filter(id => ids.has(id))
+        }, [allLayers, selected])
+
+        const toggleLayer = useCallback(id => {
+          setSelected(current => current.includes(id)
+            ? current.filter(entry => entry !== id)
+            : [...current, id])
+        }, [])
+
+        const active = 'global'
+        const scope = trim.globalScope
+
+        /**
+         * Write one checklist to the global layer and every selected workspace.
+         * This is the multi-select write; a single-layer edit goes through the
+         * same path with an empty selection.
+         */
         const onScope = next => {
-          if (active === 'global') trim.setGlobalScope(next)
-          else trim.setWorkspaces(current => ({ ...current, [active]: next }))
+          trim.setGlobalScope(next)
+          if (liveSelected.length === 0) return
+          trim.setWorkspaces(current => {
+            const updated = { ...current }
+            for (const path of liveSelected) updated[path] = { ...next }
+            return updated
+          })
         }
 
         if (trim.state === null) {
@@ -479,11 +522,15 @@ window.__ModuleLoader__.load({
         }
 
         return h(TrimEditor, {
-          layer: active, setLayer, layers, state: trim.state, scope, onScope,
+          layer: active, setLayer: id => { setLayer(id); setSelected([]) },
+          layers: allLayers, state: trim.state, scope, onScope,
           onSave: trim.save, busy: trim.busy,
           error: trim.error === 'route-missing' ? strings.routeMissing : trim.error,
           notice: trim.saved ? strings.saved : '',
           strings,
+          multiSelect: true,
+          selected: new Set([active, ...liveSelected]),
+          onToggleLayer: toggleLayer,
         })
       }
     }
