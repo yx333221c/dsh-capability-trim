@@ -1,18 +1,20 @@
 /**
  * Capability trim — Host half.
  *
- * Removes part of the capability surface from a Session: tools leave the model
- * tool list, skills leave the session catalog, and instruction files are cut out
- * of the injected workspace context. Selection is layered
- * `session > workspace > global`, and every restriction is an effect owned by
- * either the Agent scope or this plugin, so nothing touches the profile
+ * Removes part of the model-facing capability surface from a workspace: hidden
+ * tools leave the tool list, hidden skills leave the session catalog, and hidden
+ * instruction files are cut out of the injected workspace context.
+ *
+ * Selection has two layers — `workspace > global` — and no session layer: a
+ * Session follows the workspace it runs in. Every restriction is an effect owned
+ * by either the Agent scope or this plugin, so nothing touches the profile
  * configuration and clearing a layer restores the surface immediately.
  *
  * @module dsh-capability-trim
  */
 
-import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
@@ -20,7 +22,6 @@ import {
   emptyScope,
   isEmptyScope,
   matchesAny,
-  normalizeScope,
   pathKey,
   pruneInstructionFrame,
   readState,
@@ -109,14 +110,12 @@ export function apply(ctx) {
     }
   }
 
-  /** The scope one Agent is governed by, after layering. */
+  /** The restrictions one Agent is governed by, after layering. */
   const scopeFor = agent => {
     const cwd = directoryOf(agent)
-    const sessionId = String(agent.id)
     return resolveEffectiveScope(
       isEmptyScope(state.global) ? undefined : state.global,
       cwd === undefined ? undefined : state.workspaces.get(pathKey(cwd)),
-      state.sessions.get(sessionId),
     )
   }
 
@@ -154,32 +153,24 @@ export function apply(ctx) {
       const skills = ctx.get('skills')
       if (skills !== undefined && scope.denySkills.length > 0) {
         const cwd = directoryOf(agent)
-        // The scope is required: without it the registry merges only its global
+        // A scope is required: without it the registry merges only its global
         // layer, so user and project skills from the preset-registered provider
         // are invisible and a deny rule silently matches nothing.
-        const catalog = await skills.list({
-          ...cwd === undefined ? {} : { cwd },
-          scope: agent,
-        })
+        const lookup = { ...cwd === undefined ? {} : { cwd }, scope: agent }
+        const catalog = await skills.list(lookup)
         for (const summary of catalog) {
           if (!matchesAny(scope.denySkills, summary.name)) continue
-          // Copy the whole definition before hiding it.
-          //
-          // A hand-built stub (`content: ''`) is not equivalent: the registry's
-          // `get()` returns the runtime entry verbatim, so a stub would hand the
-          // model an empty skill body on a `/name` invocation, and the shadowed
-          // entry must still satisfy `validateRuntimeSkill`. Measured: the stub
-          // form left the skill fully visible, the copy form hides it.
-          const definition = await skills.get(summary.name, {
-            ...cwd === undefined ? {} : { cwd },
-            scope: agent,
-          })
+          // Copy the whole definition before hiding it. A hand-built stub
+          // (`content: ''`) does not work: the registry returns the runtime entry
+          // verbatim, so the model would receive an empty body, and the entry
+          // does not displace the provider-sourced one. Measured both ways.
+          const definition = await skills.get(summary.name, lookup)
           if (definition === undefined) continue
           const invocation = definition.invocation ?? { modelInvocable: true, userInvocable: true }
           // Register through THIS Agent's own service instance: `register()`
           // files into the layer of the context that owns the service, so
-          // `agent.ctx` is the only instance that lands in the agent layer where
-          // it can shadow a preset-registered skill.
+          // `agent.ctx` is the only instance that lands in the layer where it
+          // can shadow a preset-registered skill.
           const scopedSkills = agent.ctx.get('skills')
           if (scopedSkills === undefined) continue
           disposers.push(scopedSkills.register({
@@ -230,10 +221,9 @@ export function apply(ctx) {
   }
 
   /**
-   * Re-apply every live Agent whose effective scope changed, so a save is felt
-   * by running sessions without a restart.
+   * Re-apply every live Agent whose effective scope changed.
    *
-   * @param {{ global: object, workspaces: Map<string, object>, sessions: Map<string, object> }} previous
+   * @param {{ global: object, workspaces: Map<string, object> }} previous
    */
   const applyChanged = async previous => {
     const agents = ctx.get('agents')
@@ -243,7 +233,6 @@ export function apply(ctx) {
       const before = resolveEffectiveScope(
         isEmptyScope(previous.global) ? undefined : previous.global,
         cwd === undefined ? undefined : previous.workspaces.get(pathKey(cwd)),
-        previous.sessions.get(String(agent.id)),
       )
       if (sameScope(before, scopeFor(agent))) continue
       await applyTo(agent)
@@ -255,7 +244,7 @@ export function apply(ctx) {
   })
 
   ctx.on('agent/disposed', ({ agent }) => {
-    uninstall(String(agent.id))
+    uninstall(agent.id)
   })
 
   // Instructions are injected as ordinary user messages. This listener runs
@@ -304,207 +293,177 @@ export function apply(ctx) {
   })()
 
   // The route is its own lifecycle: `webServer` and `connection` may be provided
-  // after this plugin applies, so waiting on them here keeps the panel working
-  // regardless of boot order. Reading them once at apply time would silently
-  // never register the route on a profile whose composition loads us first.
+  // after this plugin applies, so waiting on them keeps the panel working
+  // regardless of boot order.
   ctx.inject(['webServer', 'connection'], browser => {
     const webServer = browser.webServer
     const connection = browser.connection
 
-  /** Answer an unauthenticated or foreign request; true when it was rejected. */
-  const rejected = (req, res) => {
-    const rejection = connection.requestRejection(req)
-    if (rejection === undefined) return false
-    res.statusCode = rejection
-    res.end()
-    return true
-  }
-
-  const sendJson = (res, status, body) => {
-    res.statusCode = status
-    res.setHeader('content-type', 'application/json; charset=utf-8')
-    res.setHeader('cache-control', 'no-store')
-    res.end(JSON.stringify(body))
-  }
-
-  const readJsonBody = async req => {
-    const chunks = []
-    let bytes = 0
-    for await (const chunk of req) {
-      bytes += chunk.length
-      if (bytes > MAX_BODY_BYTES) throw new Error('request body is too large')
-      chunks.push(chunk)
-    }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
-  }
-
-  /**
-   * Instruction files present in a workspace, so the panel offers real paths
-   * rather than a guess. Discovery is best-effort: a missing `fs` seam or a
-   * vanished workspace simply yields fewer rows.
-   *
-   * @param {string | undefined} cwd
-   */
-  const instructionFiles = async cwd => {
-    const candidates = ['AGENTS.md', 'CLAUDE.md', 'AGENTS.local.md', 'CLAUDE.local.md']
-    if (cwd === undefined) return candidates.map(path => ({ path }))
-    const fs = ctx.get('fs')
-    if (fs === undefined) return candidates.map(path => ({ path }))
-    const found = []
-    for (const candidate of candidates) {
-      try {
-        // `lstat` accepts a plain path plus a base directory, which is the one
-        // shape that does not require constructing a provider-specific target.
-        const info = await fs.lstat(candidate, { cwd })
-        if (info !== undefined && info !== null) found.push({ path: candidate })
-      } catch {
-        // A missing candidate is simply not offered.
-      }
-    }
-    return found
-  }
-
-  /**
-   * Everything the panel needs to render a checklist for one workspace.
-   *
-   * `scope` is not optional in spirit: the skill registry merges a global layer
-   * with the viewing scope's chain, and the filesystem provider — which supplies
-   * every user and project skill — is registered inside an agent preset's layer.
-   * A read without a scope therefore sees only the deployment-wide bundled
-   * skills, which is why an unscoped panel showed 5 while a session had 16.
-   *
-   * @param {string | undefined} cwd
-   * @param {any | undefined} scope a live Agent to view the catalog through
-   */
-  const surface = async (cwd, scope) => {
-    const skills = ctx.get('skills')
-    let skillSummaries = []
-    let skillError
-    if (skills !== undefined) {
-      try {
-        const options = {
-          ...cwd === undefined ? {} : { cwd },
-          ...scope === undefined ? {} : { scope },
-        }
-        const catalog = await skills.list(options)
-        skillSummaries = catalog
-          .filter(summary => summary.invocation.modelInvocable)
-          .map(summary => ({ name: summary.name, description: summary.description }))
-      } catch (error) {
-        // Never swallow this silently: an empty list and a failed discovery look
-        // identical in the panel, which is exactly how the missing user skills
-        // went unnoticed.
-        skillError = error instanceof Error ? error.message : String(error)
-        logger?.warn('skill discovery failed: %s', skillError)
-        skillSummaries = []
-      }
-    }
-    return {
-      tools: knownToolNames().sort(),
-      skills: skillSummaries,
-      ...skillError === undefined ? {} : { skillError },
-      ...scope === undefined ? {} : { skillScope: 'agent' },
-      instructions: await instructionFiles(cwd),
-    }
-  }
-
-  /**
-   * A live Agent to read the catalog through when the caller names none.
-   *
-   * The panel is a Host route with no Agent of its own, so it borrows any live
-   * session's scope. That is the closest thing to "what a session here sees"
-   * and it is the only way the preset-registered provider is reachable.
-   *
-   * @param {string | undefined} preferredCwd prefer an Agent working in this directory
-   */
-  const anyAgent = preferredCwd => {
-    const agents = ctx.get('agents')
-    if (agents === undefined) return undefined
-    const live = agents.list()
-    if (live.length === 0) return undefined
-    if (preferredCwd === undefined) return live[0]
-    const key = pathKey(preferredCwd)
-    for (const agent of live) {
-      if (pathKey(directoryOf(agent) ?? '') === key) return agent
-    }
-    return live[0]
-  }
-
-  /** Registry workspaces plus each one's own scope. */
-  const workspaceView = () => {
-    const registry = ctx.get('workspaceRegistry')
-    if (registry === undefined) return []
-    return registry.list().map(workspace => ({
-      id: workspace.id,
-      path: workspace.path,
-      title: workspace.title,
-      // The panel needs to map a Session to its workspace directory; the slot
-      // props do not carry one, so the association travels with the state.
-      sessionIds: [...workspace.sessionIds].map(String),
-      scope: state.workspaces.get(pathKey(workspace.path)) ?? emptyScope(),
-    }))
-  }
-
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
-    path: `${ROUTE_BASE}/state`,
-    handler: async (req, res) => {
-      if (rejected(req, res)) return
-
-      if (req.method === 'GET') {
-        const requested = new URL(String(req.url), 'http://localhost').searchParams.get('workspace')
-        // A cwd is required for project-level skill discovery, and it also
-        // participates in the registry's cache key. Falling back to the
-        // deployment directory keeps the panel from silently showing a
-        // narrower catalog than the sessions it configures.
-        const directories = ctx.get('workingDirectory')
-        const fallback = directories === undefined ? undefined : directories.defaultDirectory
-        const focus = typeof requested === 'string' && requested !== '' ? requested : fallback
-        sendJson(res, 200, {
-          version: state.version,
-          global: state.global,
-          workspaces: workspaceView(),
-          sessions: Object.fromEntries(state.sessions),
-          ...await surface(focus, anyAgent(focus)),
-        })
-        return
-      }
-
-      if (req.method === 'PUT') {
-        let body
-        try {
-          body = await readJsonBody(req)
-        } catch (error) {
-          sendJson(res, 400, { error: 'invalid body', detail: String(error) })
-          return
-        }
-        const next = readState({
-          global: normalizeScope(body?.global),
-          workspaces: body?.workspaces,
-          sessions: body?.sessions,
-        })
-        const previous = state
-        state = next
-        try {
-          await persist(next)
-        } catch (error) {
-          state = previous
-          sendJson(res, 500, { error: 'could not save the capability trim', detail: String(error) })
-          return
-        }
-        await applyChanged(previous)
-        sendJson(res, 200, {
-          ok: true,
-          workspaces: next.workspaces.size,
-          sessions: next.sessions.size,
-        })
-        return
-      }
-
-      res.statusCode = 405
-      res.setHeader('allow', 'GET, PUT')
+    /** Answer an unauthenticated or foreign request; true when it was rejected. */
+    const rejected = (req, res) => {
+      const rejection = connection.requestRejection(req)
+      if (rejection === undefined) return false
+      res.statusCode = rejection
       res.end()
-    },
-  }), `capability-trim: ${ROUTE_BASE}/state`)
+      return true
+    }
+
+    const sendJson = (res, status, body) => {
+      res.statusCode = status
+      res.setHeader('content-type', 'application/json; charset=utf-8')
+      res.setHeader('cache-control', 'no-store')
+      res.end(JSON.stringify(body))
+    }
+
+    const readJsonBody = async req => {
+      const chunks = []
+      let bytes = 0
+      for await (const chunk of req) {
+        bytes += chunk.length
+        if (bytes > MAX_BODY_BYTES) throw new Error('request body is too large')
+        chunks.push(chunk)
+      }
+      return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    }
+
+    /**
+     * A live Agent to read the catalog through.
+     *
+     * The skill registry merges a global layer with the viewing scope's chain,
+     * and the filesystem provider — the source of every user and project skill —
+     * is registered inside an agent-preset layer. A read without a scope sees
+     * only the deployment-wide bundled skills, so every catalog read borrows an
+     * Agent.
+     *
+     * @param {string | undefined} preferredCwd prefer an Agent working here
+     */
+    const anyAgent = preferredCwd => {
+      const agents = ctx.get('agents')
+      if (agents === undefined) return undefined
+      const live = agents.list()
+      if (live.length === 0) return undefined
+      if (preferredCwd === undefined) return live[0]
+      const key = pathKey(preferredCwd)
+      for (const agent of live) {
+        if (pathKey(directoryOf(agent) ?? '') === key) return agent
+      }
+      return live[0]
+    }
+
+    /** Instruction files present in a workspace, so the panel offers real paths. */
+    const instructionFiles = async cwd => {
+      const candidates = ['AGENTS.md', 'CLAUDE.md', 'AGENTS.local.md', 'CLAUDE.local.md']
+      if (cwd === undefined) return candidates.map(path => ({ path }))
+      const fs = ctx.get('fs')
+      if (fs === undefined) return candidates.map(path => ({ path }))
+      const found = []
+      for (const candidate of candidates) {
+        try {
+          const info = await fs.lstat(candidate, { cwd })
+          if (info !== undefined && info !== null) found.push({ path: candidate })
+        } catch {
+          // A missing candidate is simply not offered.
+        }
+      }
+      return found
+    }
+
+    /** The selectable surface for one workspace. */
+    const surface = async cwd => {
+      const skills = ctx.get('skills')
+      const agent = anyAgent(cwd)
+      let skillSummaries = []
+      let skillError
+      if (skills !== undefined) {
+        try {
+          const options = {
+            ...cwd === undefined ? {} : { cwd },
+            ...agent === undefined ? {} : { scope: agent },
+          }
+          const catalog = await skills.list(options)
+          skillSummaries = catalog
+            .filter(summary => summary.invocation.modelInvocable)
+            .map(summary => ({ name: summary.name, description: summary.description }))
+        } catch (error) {
+          // An empty list and a failed discovery look identical in the panel, so
+          // the failure travels to it rather than being swallowed.
+          skillError = error instanceof Error ? error.message : String(error)
+          logger?.warn('skill discovery failed: %s', skillError)
+        }
+      }
+      return {
+        tools: knownToolNames().sort(),
+        skills: skillSummaries,
+        ...skillError === undefined ? {} : { skillError },
+        instructions: await instructionFiles(cwd),
+      }
+    }
+
+    /** Registry workspaces, with the directory the panel keys scopes by. */
+    const workspaceView = () => {
+      const registry = ctx.get('workspaceRegistry')
+      if (registry === undefined) return []
+      return registry.list().map(workspace => ({
+        id: workspace.id,
+        path: workspace.path,
+        title: workspace.title,
+        // The composer control must map a Session to its workspace directory, and
+        // the slot props carry none, so the association travels with the state.
+        sessionIds: [...workspace.sessionIds].map(String),
+        scope: state.workspaces.get(pathKey(workspace.path)) ?? emptyScope(),
+      }))
+    }
+
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: `${ROUTE_BASE}/state`,
+      handler: async (req, res) => {
+        if (rejected(req, res)) return
+
+        if (req.method === 'GET') {
+          const requested = new URL(String(req.url), 'http://localhost').searchParams.get('workspace')
+          const directories = ctx.get('workingDirectory')
+          const fallback = directories === undefined ? undefined : directories.defaultDirectory
+          const focus = typeof requested === 'string' && requested !== '' ? requested : fallback
+          sendJson(res, 200, {
+            version: state.version,
+            global: state.global,
+            workspaces: workspaceView(),
+            ...await surface(focus),
+          })
+          return
+        }
+
+        if (req.method === 'PUT') {
+          let body
+          try {
+            body = await readJsonBody(req)
+          } catch (error) {
+            sendJson(res, 400, { error: 'invalid body', detail: String(error) })
+            return
+          }
+          const next = readState({
+            global: body?.global,
+            workspaces: body?.workspaces,
+          })
+          const previous = state
+          state = next
+          try {
+            await persist(next)
+          } catch (error) {
+            state = previous
+            sendJson(res, 500, { error: 'could not save the capability trim', detail: String(error) })
+            return
+          }
+          await applyChanged(previous)
+          sendJson(res, 200, { ok: true, workspaces: next.workspaces.size })
+          return
+        }
+
+        res.statusCode = 405
+        res.setHeader('allow', 'GET, PUT')
+        res.end()
+      },
+    }), `capability-trim: ${ROUTE_BASE}/state`)
   })
 }

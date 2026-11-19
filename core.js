@@ -1,27 +1,37 @@
 /**
- * Pure logic for capability trim: scope normalisation, precedence resolution,
+ * Pure logic for capability trim: scope normalisation, two-layer resolution,
  * name matching, and instruction-frame pruning.
  *
- * Everything here is side-effect free and importable by `node --test`; the
- * Host half keeps only orchestration and I/O.
+ * Everything here is side-effect free and importable by `node --test`; the Host
+ * half keeps only orchestration and I/O.
  *
  * @module dsh-capability-trim/core
  */
 
 /** State format version written to disk. */
-export const STATE_VERSION = 1
+export const STATE_VERSION = 2
 
 /** Reserved presentation transport; a scope restriction may not name it. */
 export const RESERVED_TOOL = 'run_code'
 
-/** Instruction file names this plugin can prune, in the order they are reported. */
+/** The three capability categories. */
+export const CATEGORIES = ['tools', 'skills', 'instructions']
+
+/** Instruction section markers this plugin can prune, in rendering order. */
 export const INSTRUCTION_MARKERS = [
   'Instructions from: ',
   'Additional instructions from: ',
   'Updated instructions from: ',
 ]
 
-/** An empty scope. */
+/**
+ * The stored model.
+ *
+ * A category holds ENTRances to hide, but the UI shows switches that default to
+ * ON, so the wire form keeps the hidden list: absent means "nothing hidden",
+ * which is the same as every switch on. Storing the hidden set rather than the
+ * enabled set keeps an untouched profile at `{}`.
+ */
 export function emptyScope() {
   return { denyTools: [], denySkills: [], denyInstructions: [] }
 }
@@ -53,8 +63,7 @@ export function pathKey(value) {
 
 /**
  * Whether one pattern selects a candidate name. A trailing `*` makes the
- * pattern a prefix, which is how a whole server or tool family is hidden.
- * Matching is case-insensitive.
+ * pattern a prefix, which is how a whole tool family is hidden.
  *
  * @param {string} pattern
  * @param {string} candidate
@@ -82,8 +91,7 @@ export function matchesAny(patterns, candidate) {
 }
 
 /**
- * Trim, drop blanks, and remove case-insensitive duplicates while keeping the
- * caller's order.
+ * Trim, drop blanks, and remove case-insensitive duplicates.
  *
  * @param {unknown} value
  * @returns {string[]}
@@ -105,8 +113,6 @@ export function cleanPatterns(value) {
 }
 
 /**
- * Coerce unknown input into a well-formed scope.
- *
  * @param {unknown} value
  * @returns {{ denyTools: string[], denySkills: string[], denyInstructions: string[] }}
  */
@@ -120,8 +126,6 @@ export function normalizeScope(value) {
 }
 
 /**
- * Whether two scopes describe identical restrictions.
- *
  * @param {{ denyTools: string[], denySkills: string[], denyInstructions: string[] } | undefined} left
  * @param {{ denyTools: string[], denySkills: string[], denyInstructions: string[] } | undefined} right
  * @returns {boolean}
@@ -134,28 +138,25 @@ export function sameScope(left, right) {
 }
 
 /**
- * Merge three scope layers so that the most specific one wins per pattern list.
+ * Merge the two layers so the workspace wins per category.
  *
- * The order is `global`, then `workspace`, then `session`: a layer that names
- * any pattern replaces the broader layer's list for that category rather than
- * adding to it. Replacement rather than accumulation is what makes
- * `session > workspace > global` predictable — a session can both hide more and
- * hide less than its workspace without editing it.
+ * There is no session layer: a Session follows the workspace it runs in. Each
+ * category resolves independently — a workspace that says nothing about skills
+ * inherits the global skill list, while a workspace that names tools replaces
+ * the global tool list rather than adding to it. Replacement keeps each layer
+ * readable on its own: you can see the whole of what a workspace hides in one
+ * place.
  *
- * @param {{ denyTools: string[], denySkills: string[], denyInstructions: string[] } | undefined} globalScope
- * @param {{ denyTools: string[], denySkills: string[], denyInstructions: string[] } | undefined} workspaceScope
- * @param {{ denyTools: string[], denySkills: string[], denyInstructions: string[] } | undefined} sessionScope
+ * @param {object | undefined} globalScope
+ * @param {object | undefined} workspaceScope
  * @returns {{ denyTools: string[], denySkills: string[], denyInstructions: string[] }}
  */
-export function resolveEffectiveScope(globalScope, workspaceScope, sessionScope) {
-  const layers = [globalScope, workspaceScope, sessionScope]
-  const pick = (field) => {
-    for (let index = layers.length - 1; index >= 0; index -= 1) {
-      const layer = layers[index]
-      if (layer === undefined) continue
-      const value = layer[field]
-      if (Array.isArray(value) && value.length > 0) return [...value]
-    }
+export function resolveEffectiveScope(globalScope, workspaceScope) {
+  const pick = field => {
+    const workspaceValue = workspaceScope?.[field]
+    if (Array.isArray(workspaceValue) && workspaceValue.length > 0) return [...workspaceValue]
+    const globalValue = globalScope?.[field]
+    if (Array.isArray(globalValue) && globalValue.length > 0) return [...globalValue]
     return []
   }
   return {
@@ -166,66 +167,56 @@ export function resolveEffectiveScope(globalScope, workspaceScope, sessionScope)
 }
 
 /**
- * Deserialize persisted state without trusting its shape.
+ * Read persisted state without trusting its shape.
  *
- * Unknown fields are dropped, blank arrays are dropped, and a malformed record
- * is skipped rather than throwing: a corrupt state file must never take the
- * Host down.
+ * Version 1 carried a `sessions` map; version 2 drops it. A v1 file is accepted
+ * and its session entries discarded, so an upgrade does not fail the Host.
  *
  * @param {unknown} parsed
- * @returns {{ version: number, global: object, workspaces: Map<string, object>, sessions: Map<string, object> }}
+ * @returns {{ version: number, global: object, workspaces: Map<string, object> }}
  */
 export function readState(parsed) {
   const source = parsed !== null && typeof parsed === 'object' ? parsed : {}
   const workspaces = new Map()
-  const sessions = new Map()
   const globalScope = normalizeScope(source.global)
 
-  const collect = (input, target) => {
-    if (input === null || typeof input !== 'object') return
-    for (const [key, value] of Object.entries(input)) {
+  if (source.workspaces !== null && typeof source.workspaces === 'object') {
+    for (const [key, value] of Object.entries(source.workspaces)) {
       const scope = normalizeScope(value)
-      if (!isEmptyScope(scope)) target.set(key, scope)
+      if (!isEmptyScope(scope)) workspaces.set(pathKey(key), scope)
     }
   }
-  collect(source.workspaces, workspaces)
-  collect(source.sessions, sessions)
 
   return {
     version: STATE_VERSION,
     global: isEmptyScope(globalScope) ? emptyScope() : globalScope,
     workspaces,
-    sessions,
   }
 }
 
 /**
- * Serialize state for persistence, dropping empty scopes so the file stays
- * readable and a cleared workspace disappears from it entirely.
+ * Serialize state for persistence, dropping empty scopes so a cleared layer
+ * disappears from the file entirely.
  *
- * @param {{ global: object, workspaces: Map<string, object>, sessions: Map<string, object> }} state
+ * @param {{ global: object, workspaces: Map<string, object> }} state
  * @returns {object}
  */
 export function writeState(state) {
   const globalScope = normalizeScope(state.global)
-  const collect = (source) => {
-    const result = {}
-    for (const [key, value] of source) {
-      const scope = normalizeScope(value)
-      if (!isEmptyScope(scope)) result[key] = scope
-    }
-    return result
+  const workspaces = {}
+  for (const [key, value] of state.workspaces ?? new Map()) {
+    const scope = normalizeScope(value)
+    if (!isEmptyScope(scope)) workspaces[key] = scope
   }
   return {
     version: STATE_VERSION,
     ...isEmptyScope(globalScope) ? {} : { global: globalScope },
-    workspaces: collect(state.workspaces ?? new Map()),
-    sessions: collect(state.sessions ?? new Map()),
+    workspaces,
   }
 }
 
 /**
- * Split an instruction frame into its opening line, body, and closing line.
+ * Split an instruction frame into its wrapper and body.
  *
  * @param {string} text
  * @returns {{ open: string, body: string, close: string } | undefined}
@@ -241,8 +232,7 @@ function splitFrame(text) {
  *
  * @param {string} body
  * @param {number} from
- * @returns {{ index: number, end: number, displayPath: string } | undefined} the
- * marker's start, the offset just past its newline, and the path it names.
+ * @returns {{ index: number, end: number, displayPath: string, marker: string } | undefined}
  */
 function findMarker(body, from) {
   let best
@@ -250,7 +240,7 @@ function findMarker(body, from) {
     let index = body.indexOf(marker, from)
     while (index !== -1) {
       // A marker only counts at a block boundary, so instruction prose that
-      // happens to quote the phrase cannot start a phantom section.
+      // quotes the phrase cannot start a phantom section.
       const atBoundary = index === 0 || body.startsWith('\n\n', index - 2)
       if (atBoundary) {
         const newline = body.indexOf('\n', index)
@@ -270,17 +260,9 @@ function findMarker(body, from) {
 /**
  * Remove the instruction sections whose path matches a deny pattern.
  *
- * The frame is the one `dsh-agent-instructions` renders: a `<system-reminder>`
- * wrapper whose body is blocks separated by blank lines, each section starting
- * with `Instructions from: <path>` (or an `Additional`/`Updated` variant). Only
- * the matching sections are cut; every other byte — the intro paragraph, the
- * remaining sections, the wrapper — is preserved so the reader sees a normal
- * frame.
- *
  * @param {string} text - the complete model-facing message text.
  * @param {readonly string[]} patterns - path patterns to remove.
- * @returns {{ text: string, removed: string[] }} the pruned frame and the paths
- * it removed. When nothing matched the input is returned unchanged.
+ * @returns {{ text: string, removed: string[] }}
  */
 export function pruneInstructionFrame(text, patterns) {
   if (typeof text !== 'string' || text === '' || patterns.length === 0) {
@@ -290,7 +272,6 @@ export function pruneInstructionFrame(text, patterns) {
   if (frame === undefined) return { text, removed: [] }
 
   const body = frame.body
-  /** @type {Array<{ index: number, end: number, displayPath: string }>} */
   const sections = []
   let cursor = 0
   while (true) {
@@ -307,11 +288,7 @@ export function pruneInstructionFrame(text, patterns) {
     const section = sections[index]
     const next = sections[index + 1]
     if (!deniesInstruction(patterns, section.displayPath)) continue
-    // The section runs to the next marker; the leading blank separator belongs
-    // to the block being removed, so no stray gap survives.
-    const start = section.index
-    const end = next === undefined ? body.length : next.index
-    keeps.push({ start, end })
+    keeps.push({ start: section.index, end: next === undefined ? body.length : next.index })
     removed.push(section.displayPath)
   }
   if (keeps.length === 0) return { text, removed: [] }
@@ -323,22 +300,17 @@ export function pruneInstructionFrame(text, patterns) {
     position = span.end
   }
   pruned += body.slice(position)
-  // Collapse the blank separators left behind where a middle section was cut.
   pruned = pruned.replace(/\n{3,}/g, '\n\n')
 
-  const trimmed = pruned.trim()
-  if (trimmed === '') {
-    return { text: `${frame.open}${frame.close}`, removed }
-  }
+  if (pruned.trim() === '') return { text: `${frame.open}${frame.close}`, removed }
   return { text: `${frame.open}${pruned}${frame.close}`, removed }
 }
 
 /**
- * Whether a model-facing instruction path matches any deny pattern.
+ * Whether a model-facing instruction path matches a deny pattern.
  *
  * A pattern matches either the whole project-relative path or the file's own
- * name, so `CLAUDE.md` hides every `CLAUDE.md` at any depth while
- * `web/CLAUDE.md` hides just that one. Trailing `*` still works as a prefix.
+ * name, so `CLAUDE.md` hides every `CLAUDE.md` at any depth.
  *
  * @param {readonly string[]} patterns
  * @param {string} displayPath

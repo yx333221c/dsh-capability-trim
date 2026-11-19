@@ -83,31 +83,32 @@ test('sameScope compares every category', () => {
   assert.equal(sameScope(a, undefined), false)
 })
 
-test('resolveEffectiveScope lets the most specific populated layer win', () => {
+test('resolveEffectiveScope lets the workspace win per category', () => {
   const globalScope = { denyTools: ['g'], denySkills: [], denyInstructions: [] }
   const workspaceScope = { denyTools: [], denySkills: ['w'], denyInstructions: [] }
-  const sessionScope = { denyTools: ['s'], denySkills: [], denyInstructions: ['CLAUDE.md'] }
 
-  const resolved = resolveEffectiveScope(globalScope, workspaceScope, sessionScope)
-  assert.deepEqual(resolved.denyTools, ['s'], 'session overrides the broader tool list')
-  assert.deepEqual(resolved.denySkills, ['w'], 'workspace fills the category session left empty')
-  assert.deepEqual(resolved.denyInstructions, ['CLAUDE.md'])
+  const resolved = resolveEffectiveScope(globalScope, workspaceScope)
+  assert.deepEqual(resolved.denyTools, ['g'], 'a category the workspace leaves empty falls back to global')
+  assert.deepEqual(resolved.denySkills, ['w'], 'a category the workspace names wins')
 })
 
 test('resolveEffectiveScope replaces rather than accumulates', () => {
   const resolved = resolveEffectiveScope(
     { denyTools: ['a'], denySkills: [], denyInstructions: [] },
     { denyTools: ['b'], denySkills: [], denyInstructions: [] },
-    undefined,
   )
   assert.deepEqual(resolved.denyTools, ['b'], 'a workspace narrows the global list, not adds to it')
 })
 
 test('resolveEffectiveScope tolerates missing layers', () => {
-  assert.deepEqual(resolveEffectiveScope(undefined, undefined, undefined), emptyScope())
+  assert.deepEqual(resolveEffectiveScope(undefined, undefined), emptyScope())
   assert.deepEqual(
-    resolveEffectiveScope(undefined, { denyTools: ['w'], denySkills: [], denyInstructions: [] }, undefined).denyTools,
+    resolveEffectiveScope(undefined, { denyTools: ['w'], denySkills: [], denyInstructions: [] }).denyTools,
     ['w'],
+  )
+  assert.deepEqual(
+    resolveEffectiveScope({ denyTools: ['g'], denySkills: [], denyInstructions: [] }, undefined).denyTools,
+    ['g'],
   )
 })
 
@@ -119,11 +120,20 @@ test('readState rebuilds maps and drops empty scopes', () => {
       'j:\\a': { denyTools: ['x'] },
       'j:\\b': { denyTools: [] },
     },
-    sessions: { s1: { denySkills: ['office-docx'] } },
   })
   assert.deepEqual(state.workspaces.get('j:\\a').denyTools, ['x'])
   assert.equal(state.workspaces.has('j:\\b'), false, 'an empty workspace scope is not stored')
-  assert.deepEqual(state.sessions.get('s1').denySkills, ['office-docx'])
+  assert.deepEqual(state.global.denyTools, ['g'])
+})
+
+test('readState discards the version-1 session map', () => {
+  const state = readState({
+    version: 1,
+    global: { denyTools: ['g'] },
+    workspaces: {},
+    sessions: { s1: { denySkills: ['office-docx'] } },
+  })
+  assert.equal('sessions' in state, false, 'v2 has no session layer')
   assert.deepEqual(state.global.denyTools, ['g'])
 })
 
@@ -132,7 +142,6 @@ test('readState survives garbage without throwing', () => {
     const state = readState(input)
     assert.deepEqual(state.global, emptyScope())
     assert.equal(state.workspaces.size, 0)
-    assert.equal(state.sessions.size, 0)
   }
 })
 
@@ -140,18 +149,17 @@ test('writeState round-trips through readState', () => {
   const original = {
     global: { denyTools: ['g'], denySkills: [], denyInstructions: [] },
     workspaces: new Map([['j:\\a', { denyTools: ['w'], denySkills: [], denyInstructions: [] }]]),
-    sessions: new Map([['s1', { denyTools: [], denySkills: [], denyInstructions: ['AGENTS.md'] }]]),
   }
   const restored = readState(writeState(original))
   assert.deepEqual(restored.global, original.global)
   assert.deepEqual(restored.workspaces.get('j:\\a'), original.workspaces.get('j:\\a'))
-  assert.deepEqual(restored.sessions.get('s1'), original.sessions.get('s1'))
 })
 
 test('writeState omits an empty global scope', () => {
-  const serialized = writeState({ global: emptyScope(), workspaces: new Map(), sessions: new Map() })
+  const serialized = writeState({ global: emptyScope(), workspaces: new Map() })
   assert.equal('global' in serialized, false)
   assert.deepEqual(serialized.workspaces, {})
+  assert.equal('sessions' in serialized, false)
 })
 
 const frame = (body) => `<system-reminder>\n${body}\n</system-reminder>`
