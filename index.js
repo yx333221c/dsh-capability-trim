@@ -344,19 +344,26 @@ export function apply(ctx) {
   const surface = async cwd => {
     const skills = ctx.get('skills')
     let skillSummaries = []
+    let skillError
     if (skills !== undefined) {
       try {
         const catalog = await skills.list(cwd === undefined ? {} : { cwd })
         skillSummaries = catalog
           .filter(summary => summary.invocation.modelInvocable)
           .map(summary => ({ name: summary.name, description: summary.description }))
-      } catch {
+      } catch (error) {
+        // Never swallow this silently: an empty list and a failed discovery look
+        // identical in the panel, which is exactly how the missing user skills
+        // went unnoticed.
+        skillError = error instanceof Error ? error.message : String(error)
+        logger?.warn('skill discovery failed: %s', skillError)
         skillSummaries = []
       }
     }
     return {
       tools: knownToolNames().sort(),
       skills: skillSummaries,
+      ...skillError === undefined ? {} : { skillError },
       instructions: await instructionFiles(cwd),
     }
   }
@@ -384,12 +391,19 @@ export function apply(ctx) {
 
       if (req.method === 'GET') {
         const requested = new URL(String(req.url), 'http://localhost').searchParams.get('workspace')
+        // A cwd is required for project-level skill discovery, and it also
+        // participates in the registry's cache key. Falling back to the
+        // deployment directory keeps the panel from silently showing a
+        // narrower catalog than the sessions it configures.
+        const directories = ctx.get('workingDirectory')
+        const fallback = directories === undefined ? undefined : directories.defaultDirectory
+        const focus = typeof requested === 'string' && requested !== '' ? requested : fallback
         sendJson(res, 200, {
           version: state.version,
           global: state.global,
           workspaces: workspaceView(),
           sessions: Object.fromEntries(state.sessions),
-          ...await surface(typeof requested === 'string' && requested !== '' ? requested : undefined),
+          ...await surface(focus),
         })
         return
       }

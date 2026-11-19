@@ -248,6 +248,7 @@ window.__ModuleLoader__.load({
         noTool: zh ? '该层尚未注册任何工具。' : 'No tool is registered.',
         noToolMatch: zh ? '没有工具匹配该筛选。' : 'No tool matches this filter.',
         noSkill: zh ? '没有可被模型调用的技能。' : 'No model-invocable skill is registered.',
+        skillError: zh ? '技能发现失败' : 'Skill discovery failed',
         noInstruction: zh ? '这个工作区里没有找到指令文件。' : 'No instruction file was found in this workspace.',
         nothing: zh ? '暂无可配置对象。' : 'Nothing to configure yet.',
         lead: zh
@@ -372,6 +373,11 @@ window.__ModuleLoader__.load({
               }))),
 
             h('h4', { style: { ...S.title, marginTop: 12 } }, `${strings.skills} (${skills.length})`),
+            // An empty catalog and a failed discovery look identical otherwise,
+            // which is how a missing user-skills root went unnoticed once.
+            state?.skillError === undefined
+              ? null
+              : h('p', { style: S.error }, `${strings.skillError}: ${state.skillError}`),
             skills.length === 0
               ? h('p', { style: S.muted }, strings.noSkill)
               : h('div', { style: S.listBox }, skills.map(skill => h(Check, {
