@@ -2,8 +2,7 @@
  * Capability trim — Host half.
  *
  * Removes part of the model-facing capability surface from a workspace: hidden
- * tools leave the tool list, hidden skills leave the session catalog, and hidden
- * instruction files are cut out of the injected workspace context.
+ * tools leave the tool list and hidden skills leave the session catalog.
  *
  * Selection has two layers — `workspace > global` — and no session layer: a
  * Session follows the workspace it runs in. Every restriction is an effect owned
@@ -13,7 +12,7 @@
  * @module dsh-capability-trim
  */
 
-import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -23,7 +22,6 @@ import {
   isEmptyScope,
   matchesAny,
   pathKey,
-  pruneInstructionFrame,
   readState,
   resolveEffectiveScope,
   sameScope,
@@ -82,15 +80,6 @@ export function apply(ctx) {
   const installed = new Map()
   /** @type {Set<() => void>} */
   const retired = new Set()
-  /**
-   * Instruction deny lists captured at Agent creation.
-   *
-   * Frozen on purpose: a running task must not have its prompt surface changed
-   * underneath it. Editing a layer affects sessions started afterwards.
-   *
-   * @type {WeakMap<any, string[]>}
-   */
-  const instructionDecisions = new WeakMap()
   const logger = ctx.logger?.(name)
 
   /** Release every scope this plugin installed on live Agents. */
@@ -225,11 +214,6 @@ export function apply(ctx) {
    */
   const applyTo = async agent => {
     uninstall(agent.id)
-    // Freeze this Agent's instruction decision once, at creation. Re-reading it
-    // per step would let a save change a task mid-turn.
-    if (!instructionDecisions.has(agent)) {
-      instructionDecisions.set(agent, [...scopeFor(agent).denyInstructions])
-    }
     const dispose = await install(agent)
     if (dispose !== undefined) installed.set(agent.id, dispose)
   }
@@ -259,49 +243,6 @@ export function apply(ctx) {
 
   ctx.on('agent/disposed', ({ agent }) => {
     uninstall(agent.id)
-  })
-
-  // Instructions are injected as ordinary user messages. This listener runs
-  // after the instruction loader has produced its frame and rewrites only the
-  // frames whose source is that producer, so nothing else in the step moves.
-  //
-  // The deny list is captured when the Agent is created and kept for its whole
-  // life. Re-reading the saved state every step made the surface change under a
-  // running task, which is the wrong trade: a turn's tools should not be decided
-  // halfway through the turn. Editing a layer therefore affects the next session,
-  // not the one already answering.
-  ctx.on('agent/pre-step', async (payload, next) => {
-    const decision = await next()
-    if (decision.kind === 'reject') return decision
-    if (!ready) return decision
-
-    const frozen = instructionDecisions.get(payload.agent)
-    if (frozen === undefined || frozen.length === 0) return decision
-
-    let anyChanged = false
-    const messages = decision.messages.map(message => {
-      if (message.source?.kind !== 'agent-instructions') return message
-      const blocks = []
-      let changed = false
-      for (const block of message.content) {
-        if (block.type !== 'text') {
-          blocks.push(block)
-          continue
-        }
-        const pruned = pruneInstructionFrame(block.text, frozen)
-        if (pruned.removed.length === 0) {
-          blocks.push(block)
-          continue
-        }
-        changed = true
-        blocks.push({ ...block, text: pruned.text })
-      }
-      if (!changed) return message
-      anyChanged = true
-      return { ...message, content: blocks }
-    })
-    if (!anyChanged) return decision
-    return { ...decision, messages }
   })
 
   void (async () => {
@@ -370,33 +311,6 @@ export function apply(ctx) {
       return live[0]
     }
 
-    /**
-     * Instruction files present in a workspace.
-     *
-     * Uses Node's own `fs` rather than `ctx.fs`: this is a read of four known
-     * names directly under a directory the Host already trusts, and routing it
-     * through the composed filesystem made a present `AGENTS.md` report absent.
-     * The listener that does the pruning never reads files either — it rewrites
-     * the frame the instruction loader already produced — so the panel must not
-     * claim a different set than that loader sees.
-     */
-    const instructionFiles = async cwd => {
-      const candidates = ['AGENTS.md', 'CLAUDE.md', 'AGENTS.local.md', 'CLAUDE.local.md']
-      if (cwd === undefined) return candidates.map(path => ({ path }))
-      const found = []
-      for (const candidate of candidates) {
-        try {
-          const info = await stat(join(cwd, candidate))
-          if (info.isFile()) found.push({ path: candidate, bytes: info.size })
-        } catch {
-          // A missing candidate is simply not offered.
-        }
-      }
-      // Every name the loader would consider, so the panel can say what exists
-      // even when a higher-precedence file already won.
-      return found
-    }
-
     /** The selectable surface for one workspace. */
     const surface = async cwd => {
       const skills = ctx.get('skills')
@@ -424,7 +338,6 @@ export function apply(ctx) {
         tools: knownToolNames().sort(),
         skills: skillSummaries,
         ...skillError === undefined ? {} : { skillError },
-        instructions: await instructionFiles(cwd),
       }
     }
 
@@ -496,3 +409,4 @@ export function apply(ctx) {
     }), `capability-trim: ${ROUTE_BASE}/state`)
   })
 }
+

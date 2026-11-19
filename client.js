@@ -165,7 +165,6 @@ window.__ModuleLoader__.load({
           : 'The Host half is not loaded (route 404): enable Capability trim in Settings → Plugins, then reload.',
         tools: zh ? '工具' : 'Tools',
         skills: zh ? '技能' : 'Skills',
-        instructions: zh ? '指令文件' : 'Instruction files',
         filterTools: zh ? '筛选工具…' : 'Filter tools…',
         filterSkills: zh ? '筛选技能…' : 'Filter skills…',
         noTool: zh ? '没有可用的工具。' : 'No tool is available.',
@@ -173,7 +172,6 @@ window.__ModuleLoader__.load({
         noSkillMatch: zh ? '没有技能匹配该筛选。' : 'No skill matches this filter.',
         close: zh ? '关闭' : 'Close',
         noSkill: zh ? '没有可被模型调用的技能。' : 'No model-invocable skill is registered.',
-        noInstruction: zh ? '这个工作区里没有找到指令文件。' : 'No instruction file was found in this workspace.',
         skillError: zh ? '技能发现失败' : 'Skill discovery failed',
         hidden: zh ? '已隐藏' : 'hidden',
         allOn: zh ? '全部开启' : 'all on',
@@ -237,34 +235,46 @@ window.__ModuleLoader__.load({
     function TrimEditor({ scope, onToggle, state, strings, lead, fills }) {
       const [toolFilter, setToolFilter] = useState('')
       const [skillFilter, setSkillFilter] = useState('')
-      const [expanded, setExpanded] = useState(false)
+      // One flag per section: a single shared flag made the skills toggle move
+      // the tool list, because both read the same state.
+      const [expandedTools, setExpandedTools] = useState(false)
+      const [expandedSkills, setExpandedSkills] = useState(false)
 
       const tools = state?.tools ?? []
       const skills = state?.skills ?? []
-      const instructions = state?.instructions ?? []
+      // The count is per category: a badge over the tool list must not report a
+      // hidden skill, which is what made "1 hidden" appear with every tool on.
+      const hiddenTools = tools.filter(name => matchesAny(scope.denyTools, name)).length
+      const hiddenSkills = skills.filter(skill => matchesAny(scope.denySkills, skill.name)).length
       const filteredTools = toolFilter === ''
         ? tools
         : tools.filter(name => name.toLowerCase().includes(toolFilter.toLowerCase()))
       const filteredSkills = skillFilter === ''
         ? skills
         : skills.filter(skill => skill.name.toLowerCase().includes(skillFilter.toLowerCase()))
-      // The count is per category: a badge over the tool list must not report a
-      // hidden skill, which is what made "1 hidden" appear with every tool on.
-      const hiddenTools = tools.filter(name => matchesAny(scope.denyTools, name)).length
-      const hiddenSkills = skills.filter(skill => matchesAny(scope.denySkills, skill.name)).length
-      const hiddenInstructions = instructions.filter(file => deniesInstruction(scope.denyInstructions, file.path)).length
 
-      const boxHeight = expanded ? 460 : 190
-      const listStyle = { ...S.listBox, maxHeight: boxHeight }
+      const list = (items, field, keyOf, hiddenOf, expanded) => h('div', {
+        style: { ...S.listBox, maxHeight: expanded ? 460 : 190 },
+      },
+        items.map(item => {
+          const key = keyOf(item)
+          return h('div', { key, style: S.row, className: 'ct-row' },
+            h('span', { style: S.mono, title: key }, key),
+            h(Switch, {
+              checked: !hiddenOf(key),
+              label: key,
+              onChange: value => onToggle(field, key, value),
+            }))
+        }))
 
       /**
-       * One capability section: title, count, filter, expand toggle, and rows.
+       * One capability section: title, count, filter, expand toggle, and body.
        *
-       * Every section uses the same header composition so the controls sit right
-       * after their own title. Previously skills put them at the row end, which
-       * read as belonging to the next section.
+       * `body` is a single node, not a rest argument: passing both an error line
+       * and a list once shifted the positional arguments and dropped the list,
+       * which is why the skills section rendered empty.
        */
-      const section = (title, badge, filter, setFilter, placeholder, body) => h('section', { style: S.card },
+      const section = (title, badge, filter, setFilter, placeholder, expanded, setExpanded, body) => h('section', { style: S.card },
         h('div', { style: S.headRow },
           h('h3', { style: { ...S.title, flex: '0 0 auto' } }, title),
           h('span', { style: S.badge }, badge),
@@ -279,49 +289,32 @@ window.__ModuleLoader__.load({
           }, expanded ? strings.collapse : strings.expand)),
         body)
 
-      const list = (items, field, keyOf, hiddenOf) => h('div', { style: listStyle },
-        items.map(item => {
-          const key = keyOf(item)
-          return h('div', { key, style: S.row, className: 'ct-row' },
-            h('span', { style: S.mono, title: key }, key),
-            h(Switch, {
-              checked: !hiddenOf(key),
-              label: key,
-              onChange: value => onToggle(field, key, value),
-            }))
-        }))
-
       const badgeFor = count => (count === 0 ? strings.allOn : `${count} ${strings.hidden}`)
 
-      return h('div', { style: { ...S.page, ...(fills === true ? {} : {}) }, className: ROOT_CLASS },
+      return h('div', { style: S.page, className: ROOT_CLASS },
         h('style', null, STYLE_TEXT),
         h('div', { style: S.scroll },
           lead === undefined ? null : h('p', { style: S.lead }, lead),
 
           section(strings.tools, badgeFor(hiddenTools), toolFilter, setToolFilter, strings.filterTools,
+            expandedTools, setExpandedTools,
             filteredTools.length === 0
               ? h('p', { style: S.muted }, tools.length === 0 ? strings.noTool : strings.noToolMatch)
               : h(React.Fragment, null,
-                list(filteredTools, 'denyTools', name => name, name => matchesAny(scope.denyTools, name)),
+                list(filteredTools, 'denyTools', name => name, name => matchesAny(scope.denyTools, name), expandedTools),
                 h('p', { style: S.muted }, strings.toolLimit))),
 
           section(strings.skills, badgeFor(hiddenSkills), skillFilter, setSkillFilter, strings.filterSkills,
-            state?.skillError === undefined
-              ? null
-              : h('p', { style: S.error }, `${strings.skillError}: ${state.skillError}`),
-            skills.length === 0
-              ? h('p', { style: S.muted }, strings.noSkill)
-              : filteredSkills.length === 0
-                ? h('p', { style: S.muted }, strings.noSkillMatch)
-                : list(filteredSkills, 'denySkills', skill => skill.name, name => matchesAny(scope.denySkills, name))),
-
-          h('section', { style: S.card },
-            h('div', { style: S.headRow },
-              h('h3', { style: { ...S.title, flex: '0 0 auto' } }, strings.instructions),
-              h('span', { style: S.badge }, badgeFor(hiddenInstructions))),
-            instructions.length === 0
-              ? h('p', { style: S.muted }, strings.noInstruction)
-              : list(instructions, 'denyInstructions', file => file.path, path => deniesInstruction(scope.denyInstructions, path)))),
+            expandedSkills, setExpandedSkills,
+            h(React.Fragment, null,
+              state?.skillError === undefined
+                ? null
+                : h('p', { style: S.error }, `${strings.skillError}: ${state.skillError}`),
+              skills.length === 0
+                ? h('p', { style: S.muted }, strings.noSkill)
+                : filteredSkills.length === 0
+                  ? h('p', { style: S.muted }, strings.noSkillMatch)
+                  : list(filteredSkills, 'denySkills', skill => skill.name, name => matchesAny(scope.denySkills, name), expandedSkills)))),
       )
     }
 
@@ -436,19 +429,22 @@ window.__ModuleLoader__.load({
           void trim.commit(trim.globalScope, nextWorkspaces)
         }, [cwd, workspaceScope, trim])
 
-        // Nothing to configure for a Session without a directory.
-        if (cwd === undefined) return null
+        // The button always renders. An earlier version returned null while the
+        // workspace directory was still unknown, which made the control appear,
+        // flash, and vanish as state arrived — and returning before later hooks
+        // would have crashed the component outright once the tree changed.
+        const ready = cwd !== undefined
 
         /**
          * Fetch the surface for THIS workspace before opening.
          *
          * The first load has no cwd — the workspace directory is only known once
-         * the state names it — so the Host answered for its deployment fallback,
-         * where no AGENTS.md exists. Re-reading with the resolved path is what
-         * makes the instruction list and the skill catalog match this project.
+         * the state names it — so the Host answers for its deployment fallback.
+         * Re-reading with the resolved path makes the skill catalog match the
+         * project the modal is describing.
          */
         const openModal = () => {
-          void trim.reload(cwd)
+          if (cwd !== undefined) void trim.reload(cwd)
           setOpen(true)
         }
 
@@ -456,9 +452,9 @@ window.__ModuleLoader__.load({
           h('button', {
             type: 'button',
             className: ROOT_CLASS,
-            title: strings.openWorkspace,
+            title: ready ? strings.openWorkspace : strings.noWorkspace,
             onClick: openModal,
-            style: S.trigger,
+            style: { ...S.trigger, opacity: ready ? 1 : 0.5 },
           }, h('span', { 'aria-hidden': true }, '◧'), h('span', null, strings.workspaceShort)),
 
           open ? h(Modal, {
@@ -467,16 +463,17 @@ window.__ModuleLoader__.load({
             closeLabel: strings.close,
             onClose: () => setOpen(false),
           },
-            trim.state === null
-              ? h('p', { style: { ...S.muted, padding: 16 } }, trim.error !== '' ? trim.error : strings.loading)
-              : h(TrimEditor, {
-                scope: workspaceScope,
-                onToggle,
-                state: trim.state,
-                strings,
-                lead: strings.workspaceLead,
-                fills: true,
-              }))
+            !ready
+              ? h('p', { style: { ...S.muted, padding: 16 } }, strings.noWorkspace)
+              : trim.state === null
+                ? h('p', { style: { ...S.muted, padding: 16 } }, trim.error !== '' ? trim.error : strings.loading)
+                : h(TrimEditor, {
+                  scope: workspaceScope,
+                  onToggle,
+                  state: trim.state,
+                  strings,
+                  lead: strings.workspaceLead,
+                }))
           : null)
       }
     }
@@ -626,3 +623,4 @@ window.__ModuleLoader__.load({
     }
   },
 })
+
