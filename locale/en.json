@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Capability trim",
+    "description": "Trim the model-facing capability surface per session and workspace: hide tools, skills and injected instruction files. Layered session > workspace > global; clearing a layer restores it immediately because the profile configuration is never written.",
+    "detail": "docs/DETAIL.md"
+  }
+}

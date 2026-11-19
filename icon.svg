@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Capability trim">
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="#1f6feb"/>
+  <rect x="13" y="14" width="17" height="17" rx="4" fill="#ffffff" opacity="0.95"/>
+  <rect x="34" y="14" width="17" height="17" rx="4" fill="#ffffff" opacity="0.32"/>
+  <rect x="13" y="35" width="17" height="15" rx="4" fill="#ffffff" opacity="0.32"/>
+  <rect x="34" y="35" width="17" height="15" rx="4" fill="#ffffff" opacity="0.95"/>
+  <path d="M34 22.5h17" stroke="#1f6feb" stroke-width="3.2" stroke-linecap="round"/>
+  <circle cx="21.5" cy="42.5" r="3.4" fill="#1f6feb"/>
+</svg>

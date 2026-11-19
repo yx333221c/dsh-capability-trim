@@ -1,0 +1,39 @@
+{
+  "name": "@yx333221c/dsh-capability-trim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Trim the model-facing capability surface per session and workspace: hide tools, skills and injected instruction files without touching the profile configuration.",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./core": "./core.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "core.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "icon.svg"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check index.js && node --check client.js && node --check core.js"
+  },
+  "engines": {
+    "dsh": ">=0.2.1-rc.2"
+  },
+  "license": "MIT",
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-conversation"]
+    }
+  }
+}
