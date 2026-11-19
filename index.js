@@ -13,7 +13,7 @@
  * @module dsh-capability-trim
  */
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -350,21 +350,30 @@ export function apply(ctx) {
       return live[0]
     }
 
-    /** Instruction files present in a workspace, so the panel offers real paths. */
+    /**
+     * Instruction files present in a workspace.
+     *
+     * Uses Node's own `fs` rather than `ctx.fs`: this is a read of four known
+     * names directly under a directory the Host already trusts, and routing it
+     * through the composed filesystem made a present `AGENTS.md` report absent.
+     * The listener that does the pruning never reads files either — it rewrites
+     * the frame the instruction loader already produced — so the panel must not
+     * claim a different set than that loader sees.
+     */
     const instructionFiles = async cwd => {
       const candidates = ['AGENTS.md', 'CLAUDE.md', 'AGENTS.local.md', 'CLAUDE.local.md']
       if (cwd === undefined) return candidates.map(path => ({ path }))
-      const fs = ctx.get('fs')
-      if (fs === undefined) return candidates.map(path => ({ path }))
       const found = []
       for (const candidate of candidates) {
         try {
-          const info = await fs.lstat(candidate, { cwd })
-          if (info !== undefined && info !== null) found.push({ path: candidate })
+          const info = await stat(join(cwd, candidate))
+          if (info.isFile()) found.push({ path: candidate, bytes: info.size })
         } catch {
           // A missing candidate is simply not offered.
         }
       }
+      // Every name the loader would consider, so the panel can say what exists
+      // even when a higher-precedence file already won.
       return found
     }
 

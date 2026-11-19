@@ -95,12 +95,6 @@ window.__ModuleLoader__.load({
       return scope.denyTools.length === 0 && scope.denySkills.length === 0 && scope.denyInstructions.length === 0
     }
 
-    /** Count hidden entries, for the layer badge. */
-    function countOf(scope) {
-      if (scope === undefined || scope === null) return 0
-      return (scope.denyTools?.length ?? 0) + (scope.denySkills?.length ?? 0) + (scope.denyInstructions?.length ?? 0)
-    }
-
     /** Glob matching shared with the Host: a trailing `*` is a prefix. */
     function matchesAny(patterns, candidate) {
       const name = String(candidate).toLowerCase()
@@ -122,26 +116,32 @@ window.__ModuleLoader__.load({
 
     const S = {
       page: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, width: '100%', color: 'var(--dsw-alias-text-primary)' },
-      scroll: { flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 },
-      lead: { margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--dsw-alias-text-secondary)' },
-      card: { border: '1px solid var(--dsw-alias-border-subtle)', borderRadius: 10, background: 'var(--dsw-alias-bg-elevated)', padding: 12 },
-      title: { margin: '0 0 8px', fontSize: 12, fontWeight: 600, letterSpacing: '0.02em', textTransform: 'uppercase', color: 'var(--dsw-alias-text-secondary)' },
-      row: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '5px 6px', borderRadius: 6, fontSize: 13 },
-      mono: { fontFamily: 'var(--dsw-alias-font-mono, monospace)', fontSize: 12, wordBreak: 'break-all', minWidth: 0 },
-      muted: { margin: '2px 0', fontSize: 12, color: 'var(--dsw-alias-text-tertiary)' },
-      listBox: { maxHeight: 200, overflowY: 'auto', border: '1px solid var(--dsw-alias-border-subtle)', borderRadius: 8, padding: 4 },
-      error: { margin: 0, fontSize: 13, color: 'var(--dsw-alias-text-danger, #d33)' },
-      badge: { fontSize: 11, padding: '1px 7px', borderRadius: 999, background: 'var(--dsw-alias-bg-selected)', color: 'var(--dsw-alias-text-secondary)' },
+      scroll: { flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8 },
+      lead: { margin: 0, fontSize: 12, lineHeight: 1.5, color: 'var(--dsw-alias-text-secondary)' },
+      card: { border: '1px solid var(--dsw-alias-border-subtle)', borderRadius: 8, background: 'var(--dsw-alias-bg-elevated)', padding: 8 },
+      title: { margin: 0, fontSize: 12, fontWeight: 600, letterSpacing: '0.02em', textTransform: 'uppercase', color: 'var(--dsw-alias-text-secondary)' },
+      // A dense row: one line, no vertical padding beyond what reads as tappable.
+      row: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '1px 4px', borderRadius: 4, fontSize: 12, lineHeight: 1.55 },
+      mono: { fontFamily: 'var(--dsw-alias-font-mono, monospace)', fontSize: 11.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 },
+      muted: { margin: '2px 0 0', fontSize: 11, lineHeight: 1.5, color: 'var(--dsw-alias-text-tertiary)' },
+      listBox: { overflowY: 'auto', border: '1px solid var(--dsw-alias-border-subtle)', borderRadius: 6, padding: 2 },
+      error: { margin: '2px 0', fontSize: 12, color: 'var(--dsw-alias-text-danger, #d33)' },
+      badge: { fontSize: 10.5, padding: '0 6px', borderRadius: 999, background: 'var(--dsw-alias-bg-selected)', color: 'var(--dsw-alias-text-secondary)', whiteSpace: 'nowrap' },
       search: {
-        width: 150, flex: '0 0 auto', padding: '4px 10px', borderRadius: 8, fontSize: 13,
-        border: '1px solid var(--dsw-alias-border-strong)', background: 'transparent',
+        width: 130, flex: '0 0 auto', padding: '2px 8px', borderRadius: 6, fontSize: 12,
+        border: '1px solid var(--dsw-alias-border-subtle)', background: 'transparent',
         color: 'var(--dsw-alias-text-primary)',
       },
-      headRow: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 },
+      smallButton: {
+        flex: '0 0 auto', padding: '2px 8px', borderRadius: 6, font: 'inherit', fontSize: 11,
+        border: '1px solid var(--dsw-alias-border-subtle)', background: 'transparent',
+        color: 'var(--dsw-alias-text-secondary)', cursor: 'pointer',
+      },
+      headRow: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 },
       trigger: {
-        display: 'inline-flex', alignItems: 'center', gap: 6, padding: '2px 8px', borderRadius: 999,
-        border: '1px solid var(--dsw-alias-border-strong)', background: 'transparent',
-        color: 'var(--dsw-alias-text-secondary)', font: 'inherit', fontSize: 12, cursor: 'pointer',
+        display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 7px', borderRadius: 999,
+        border: '1px solid var(--dsw-alias-border-subtle)', background: 'transparent',
+        color: 'var(--dsw-alias-text-secondary)', font: 'inherit', fontSize: 11, cursor: 'pointer',
       },
     }
 
@@ -173,7 +173,9 @@ window.__ModuleLoader__.load({
         noInstruction: zh ? '这个工作区里没有找到指令文件。' : 'No instruction file was found in this workspace.',
         skillError: zh ? '技能发现失败' : 'Skill discovery failed',
         hidden: zh ? '已隐藏' : 'hidden',
-        clear: zh ? '全部开启' : 'Enable all',
+        allOn: zh ? '全部开启' : 'all on',
+        expand: zh ? '展开' : 'Expand',
+        collapse: zh ? '收起' : 'Collapse',
         openWorkspace: zh ? '本工作区的能力' : 'This workspace',
         noWorkspace: zh ? '当前会话没有工作区目录。' : 'This session has no workspace directory.',
         toolLimit: zh
@@ -231,6 +233,7 @@ window.__ModuleLoader__.load({
      */
     function TrimEditor({ scope, onToggle, state, strings, lead }) {
       const [filter, setFilter] = useState('')
+      const [expanded, setExpanded] = useState(false)
 
       const tools = state?.tools ?? []
       const skills = state?.skills ?? []
@@ -238,14 +241,21 @@ window.__ModuleLoader__.load({
       const filteredTools = filter === ''
         ? tools
         : tools.filter(name => name.toLowerCase().includes(filter.toLowerCase()))
-      const hidden = countOf(scope)
+      // The count is per category: a badge over the tool list must not report a
+      // hidden skill, which is what made "1 hidden" appear with every tool on.
+      const hiddenTools = tools.filter(name => matchesAny(scope.denyTools, name)).length
+      const hiddenSkills = skills.filter(skill => matchesAny(scope.denySkills, skill.name)).length
+      const hiddenInstructions = instructions.filter(file => deniesInstruction(scope.denyInstructions, file.path)).length
 
-      const list = (items, field, keyOf, labelOf) => h('div', { style: S.listBox },
+      const boxHeight = expanded ? 460 : 190
+      const listStyle = { ...S.listBox, maxHeight: boxHeight }
+
+      const list = (items, field, keyOf, hiddenOf) => h('div', { style: listStyle },
         items.map(item => {
           const key = keyOf(item)
-          const enabled = !matchesAny(scope[field], key)
+          const enabled = !hiddenOf(key)
           return h('div', { key, style: S.row, className: 'ct-row' },
-            h('span', { style: S.mono, title: key }, labelOf === undefined ? key : labelOf(item)),
+            h('span', { style: S.mono, title: key }, key),
             h(Switch, {
               checked: enabled,
               label: key,
@@ -261,30 +271,44 @@ window.__ModuleLoader__.load({
           h('section', { style: S.card },
             h('div', { style: S.headRow },
               h('h3', { style: { ...S.title, margin: 0, flex: '0 0 auto' } }, strings.tools),
+              h('span', { style: S.badge }, hiddenTools === 0 ? strings.allOn : `${hiddenTools} ${strings.hidden}`),
               h('input', {
                 type: 'search', value: filter, placeholder: strings.filterTools, style: S.search,
                 onChange: event => setFilter(event.target.value),
               }),
-              h('span', { style: S.badge }, `${hidden} ${strings.hidden}`)),
+              h('button', {
+                type: 'button', style: S.smallButton,
+                onClick: () => setExpanded(value => !value),
+                title: expanded ? strings.collapse : strings.expand,
+              }, expanded ? strings.collapse : strings.expand)),
             filteredTools.length === 0
               ? h('p', { style: S.muted }, tools.length === 0 ? strings.noTool : strings.noToolMatch)
-              : list(filteredTools, 'denyTools', name => name),
+              : list(filteredTools, 'denyTools', name => name, name => matchesAny(scope.denyTools, name)),
             h('p', { style: S.muted }, strings.toolLimit)),
 
           h('section', { style: S.card },
-            h('h3', { style: S.title }, strings.skills),
+            h('div', { style: S.headRow },
+              h('h3', { style: { ...S.title, margin: 0, flex: '1 1 auto' } }, strings.skills),
+              h('span', { style: S.badge }, hiddenSkills === 0 ? strings.allOn : `${hiddenSkills} ${strings.hidden}`),
+              h('button', {
+                type: 'button', style: S.smallButton,
+                onClick: () => setExpanded(value => !value),
+                title: expanded ? strings.collapse : strings.expand,
+              }, expanded ? strings.collapse : strings.expand)),
             state?.skillError === undefined
               ? null
               : h('p', { style: S.error }, `${strings.skillError}: ${state.skillError}`),
             skills.length === 0
               ? h('p', { style: S.muted }, strings.noSkill)
-              : list(skills, 'denySkills', skill => skill.name)),
+              : list(skills, 'denySkills', skill => skill.name, name => matchesAny(scope.denySkills, name))),
 
           h('section', { style: S.card },
-            h('h3', { style: S.title }, strings.instructions),
+            h('div', { style: S.headRow },
+              h('h3', { style: { ...S.title, margin: 0, flex: '1 1 auto' } }, strings.instructions),
+              h('span', { style: S.badge }, hiddenInstructions === 0 ? strings.allOn : `${hiddenInstructions} ${strings.hidden}`)),
             instructions.length === 0
               ? h('p', { style: S.muted }, strings.noInstruction)
-              : list(instructions, 'denyInstructions', file => file.path))),
+              : list(instructions, 'denyInstructions', file => file.path, path => deniesInstruction(scope.denyInstructions, path)))),
       )
     }
 
@@ -416,40 +440,55 @@ window.__ModuleLoader__.load({
             role: 'dialog',
             'aria-modal': true,
             'aria-label': strings.workspace,
-            onClick: event => { if (event.target === event.currentTarget) setOpen(false) },
+            // A true modal: the backdrop swallows pointer and wheel events so the
+            // conversation behind it cannot scroll, select, or overlap the panel.
+            onClick: event => { event.stopPropagation() },
+            onWheel: event => { event.stopPropagation() },
+            onKeyDown: event => {
+              if (event.key === 'Escape') setOpen(false)
+              event.stopPropagation()
+            },
             style: {
-              position: 'fixed', inset: 0, zIndex: 9999, display: 'flex',
-              alignItems: 'center', justifyContent: 'center',
-              background: 'rgba(0,0,0,0.45)', padding: 24,
+              position: 'fixed', inset: 0, zIndex: 9999,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'rgba(0,0,0,0.62)', padding: 20,
+              overscrollBehavior: 'contain',
             },
           }, h('div', {
             className: ROOT_CLASS,
             style: {
-              width: 'min(720px, 100%)', maxHeight: '80vh', borderRadius: 12,
+              width: 'min(860px, 100%)', maxHeight: '85vh', borderRadius: 12,
               border: '1px solid var(--dsw-alias-border-strong)',
-              background: 'var(--dsw-alias-bg-elevated)',
-              padding: 16, display: 'flex', flexDirection: 'column', gap: 8,
+              background: 'var(--dsw-alias-bg-base, var(--dsw-alias-bg-elevated))',
+              boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
+              display: 'flex', flexDirection: 'column', minHeight: 0,
             },
           },
-            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 } },
+            h('div', {
+              style: {
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                gap: 10, padding: '10px 14px',
+                borderBottom: '1px solid var(--dsw-alias-border-subtle)',
+              },
+            },
               h('div', { style: { minWidth: 0 } },
                 h('div', { style: { fontSize: 14, fontWeight: 600 } }, strings.workspace),
-                h('div', { style: { ...S.path, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: cwd }, cwd)),
+                h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: cwd }, cwd)),
               h('button', {
                 type: 'button',
                 onClick: () => setOpen(false),
-                style: { ...S.trigger, alignSelf: 'flex-start' },
+                style: { ...S.trigger, padding: '2px 9px', fontSize: 13 },
               }, '✕')),
-            trim.state === null
-              ? h('p', { style: S.muted }, trim.error !== '' ? trim.error : strings.loading)
-              : h(TrimEditor, {
-                scope: workspaceScope,
-                onToggle,
-                state: trim.state,
-                strings,
-                lead: strings.workspaceLead,
-              }),
-            trim.error !== '' && trim.state !== null ? h('p', { style: S.error }, trim.error) : null))
+            h('div', { style: { flex: '1 1 auto', minHeight: 0, display: 'flex' } },
+              trim.state === null
+                ? h('p', { style: { ...S.muted, padding: 16 } }, trim.error !== '' ? trim.error : strings.loading)
+                : h(TrimEditor, {
+                  scope: workspaceScope,
+                  onToggle,
+                  state: trim.state,
+                  strings,
+                  lead: strings.workspaceLead,
+                }))))
           : null)
       }
     }
