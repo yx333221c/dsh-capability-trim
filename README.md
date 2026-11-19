@@ -57,11 +57,19 @@ Deleting that file is the same as clearing every layer.
 
 ## Using it
 
-- **Sidebar panel** — the global layer and each registered workspace.
+- **Sidebar panel** — the global layer plus every registered workspace.
 - **Conversation View tab** — this session, its workspace, and global.
 
-Untick what does not belong, then **Save and apply**. Running sessions are
-updated in place; other workspaces are untouched.
+Pick a layer on the left, untick what does not belong, then **Save and apply**
+(pinned in the footer, so it stays visible). Running sessions are updated in
+place; other workspaces are untouched.
+
+`Global` is the default for every workspace: anything hidden there is hidden
+everywhere unless a workspace or a session overrides that category.
+
+A session that should start from its workspace's choices has **Seed from
+workspace**, which copies them in. Seeding merges, so entries the session
+already hides are kept rather than replaced.
 
 ### Patterns
 
