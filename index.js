@@ -279,9 +279,13 @@ export function apply(ctx) {
     for (const agent of agents.list()) await applyTo(agent)
   })()
 
-  const webServer = ctx.get('webServer')
-  const connection = ctx.get('connection')
-  if (webServer === undefined || connection === undefined) return
+  // The route is its own lifecycle: `webServer` and `connection` may be provided
+  // after this plugin applies, so waiting on them here keeps the panel working
+  // regardless of boot order. Reading them once at apply time would silently
+  // never register the route on a profile whose composition loads us first.
+  ctx.inject(['webServer', 'connection'], browser => {
+    const webServer = browser.webServer
+    const connection = browser.connection
 
   /** Answer an unauthenticated or foreign request; true when it was rejected. */
   const rejected = (req, res) => {
@@ -423,4 +427,5 @@ export function apply(ctx) {
       res.end()
     },
   }), `capability-trim: ${ROUTE_BASE}/state`)
+  })
 }

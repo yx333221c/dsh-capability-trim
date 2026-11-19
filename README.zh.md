@@ -68,7 +68,54 @@ $DSH_HOME/capability-trim.json
 
 ## 安装
 
-用插件管理器安装本目录（**插件 → 添加插件**），然后在侧边栏面板列表里启用 **能力裁剪**。
+需要 DSH `0.2.1-rc.2` 或更新版本（即 `engines.dsh` 的下界）。下面三条路径殊途同归，按你运行 DSH 的方式挑一条。
+
+### 从 npm 安装（发布之后）
+
+```powershell
+dsh plugin --profile <profile> add @yx333221c/dsh-capability-trim
+```
+
+### 从 GitHub 安装
+
+本包是纯 ESM，没有构建步骤，所以 git 安装可以直接用：
+
+```powershell
+dsh plugin --profile <profile> add github:yx333221c/dsh-capability-trim
+```
+
+### 从本地目录安装
+
+```powershell
+dsh plugin --profile <profile> add <本地目录路径>
+```
+
+### 没有 `dsh` 命令时（桌面版）
+
+桌面版的 `PATH` 上没有 `dsh`。改用应用本身：
+
+1. **设置 → 插件 → 添加插件**，指向本地目录（发布后也可以直接填包名）。
+2. 启用该行；若提示 `restart-required`，重启宿主。
+
+或者直接改 profile——`<profile>` 是 `%USERPROFILE%\.dsh\profiles\` 下的目录，通常是 `desktop`：
+
+1. 在 `<profile>\package.json` 里加上依赖
+   `"@yx333221c/dsh-capability-trim": "link:<本地目录路径>"`，并把
+   `@yx333221c/dsh-capability-trim` 追加到 `dsh.profile.bundles`。
+2. 执行 `pnpm install --dir <profile>`。
+3. 重启 DSH。
+
+### 确认已加载
+
+打开侧边栏，找 **能力裁剪** 的面板图标；或打开一个会话，找 **能力裁剪** 的视图标签。任一处能列出工具，就说明宿主路由已经应答。
+
+### 卸载
+
+```powershell
+dsh plugin --profile <profile> remove @yx333221c/dsh-capability-trim
+```
+
+卸载会还原它裁剪过的全部能力面：限制由插件与各个 Agent 共同持有，从不写进你的 profile。
 
 ## 开发
 

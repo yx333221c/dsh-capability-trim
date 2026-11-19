@@ -86,8 +86,60 @@ These are boundaries of the current Harness extension points, not configuration:
 
 ## Install
 
-Install the bundle directory with the plugin manager (**Plugins → Add plugin**),
-then enable **Capability trim** in the sidebar panel list.
+Requires DSH `0.2.1-rc.2` or newer (the `engines.dsh` lower bound). Both routes
+below end in the same place; pick the one that matches how you run DSH.
+
+### From npm (once published)
+
+```powershell
+dsh plugin --profile <profile> add @yx333221c/dsh-capability-trim
+```
+
+### From GitHub
+
+This package is plain ESM with no build step, so a git install works as-is:
+
+```powershell
+dsh plugin --profile <profile> add github:yx333221c/dsh-capability-trim
+```
+
+### From a local checkout
+
+```powershell
+dsh plugin --profile <profile> add <path-to-checkout>
+```
+
+### Without a `dsh` CLI (desktop app)
+
+The desktop app has no `dsh` on `PATH`. Use the app instead:
+
+1. **Settings → Plugins → Add plugin**, and point it at the checkout directory
+   (or the npm package name, once published).
+2. Enable the row, then restart the Host if the change reports `restart-required`.
+
+Or edit the profile directly — `<profile>` is a directory under
+`%USERPROFILE%\.dsh\profiles\`, usually `desktop`:
+
+1. In `<profile>\package.json`, add the dependency
+   `"@yx333221c/dsh-capability-trim": "link:<path-to-checkout>"` and append
+   `@yx333221c/dsh-capability-trim` to `dsh.profile.bundles`.
+2. Run `pnpm install --dir <profile>`.
+3. Restart DSH.
+
+### Verify it loaded
+
+Open the sidebar and look for the **Capability trim** panel icon, or open a
+conversation and look for the **Capability trim** View tab. Either surface
+listing your tools means the Host route answered.
+
+### Uninstall
+
+```powershell
+dsh plugin --profile <profile> remove @yx333221c/dsh-capability-trim
+```
+
+Uninstalling restores every surface it trimmed: the restrictions were owned by
+the plugin and by each Agent, never written into your profile.
 
 ## Development
 

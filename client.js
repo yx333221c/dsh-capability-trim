@@ -20,7 +20,14 @@ window.__ModuleLoader__.load({
     const ROUTE = '/capability-trim/api/state'
     const EMPTY = { denyTools: [], denySkills: [], denyInstructions: [] }
 
-    /** Read the Host state, optionally focused on one workspace directory. */
+    /**
+     * Read the Host state, optionally focused on one workspace directory.
+     *
+     * A `404` here means the Host half has not registered its route yet — the
+     * page loaded before the plugin row activated, or the row was just disabled.
+     * Reporting that as a plain status number is what made the earlier failure
+     * unreadable, so the message names the cause instead.
+     */
     async function readState(cwd) {
       const query = typeof cwd === 'string' && cwd !== '' ? `?workspace=${encodeURIComponent(cwd)}` : ''
       const response = await fetch(`${ROUTE}${query}`, {
@@ -28,8 +35,33 @@ window.__ModuleLoader__.load({
         credentials: 'same-origin',
         headers: { accept: 'application/json' },
       })
+      if (response.status === 404) {
+        throw new Error('the Host half of Capability trim is not loaded (route 404): enable the plugin in Settings → Plugins, then reload the page')
+      }
       if (!response.ok) throw new Error(`the Host answered ${response.status}`)
       return response.json()
+    }
+
+    /**
+     * Read the state, retrying briefly while the route is still missing.
+     *
+     * The page can render before the Host row finishes activating, and the row
+     * can be re-enabled while this component stays mounted; a single attempt
+     * turns both cases into a permanent error.
+     */
+    async function readStateWithRetry(cwd, attempts = 4) {
+      let last
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        try {
+          return await readState(cwd)
+        } catch (cause) {
+          last = cause
+          const retryable = String(cause?.message ?? '').includes('404')
+          if (!retryable) throw cause
+          await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)))
+        }
+      }
+      throw last
     }
 
     /** Persist the complete layered state. */
@@ -272,7 +304,7 @@ window.__ModuleLoader__.load({
 
       const reload = useCallback(async () => {
         try {
-          const data = await readState(cwd)
+          const data = await readStateWithRetry(cwd)
           setState(data)
           setGlobalScope(asScope(data.global))
           const byPath = {}
