@@ -192,7 +192,7 @@ window.__ModuleLoader__.load({
         background: 'var(--dsw-alias-bg-elevated)', padding: 12, minWidth: 0, width: '100%',
       },
       title: { margin: '0 0 8px', fontSize: 12, fontWeight: 600, letterSpacing: '0.02em', textTransform: 'uppercase', color: 'var(--dsw-alias-text-secondary)' },
-      subtitleRow: { display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', marginBottom: 8 },
+      subtitleRow: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 },
       showing: { margin: '0 0 2px', fontSize: 12, color: 'var(--dsw-alias-text-secondary)' },
       headActions: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
       toggleRow: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 },
@@ -347,10 +347,11 @@ window.__ModuleLoader__.load({
             : null,
 
           h('section', { style: S.card },
+            // Title, search and Clear sit together at the left. Previously the
+            // header used space-between, which pushed the controls to the far
+            // edge and opened a wide empty band between them.
             h('div', { style: S.subtitleRow },
-              h('h3', { style: { ...S.title, margin: 0 } }, strings.hiddenIn),
-              // Search and Clear share the header row instead of stretching a
-              // search field across the full width, which left a large gap.
+              h('h3', { style: { ...S.title, margin: 0, flex: '0 0 auto' } }, strings.hiddenIn),
               h('div', { style: S.headActions },
                 h('input', {
                   type: 'search', value: filter, placeholder: strings.filterTools, style: S.search,
@@ -464,7 +465,6 @@ window.__ModuleLoader__.load({
       return function Panel() {
         const strings = useStrings(locale)
         const trim = useTrim(undefined)
-        const [layer, setLayer] = useState('global')
         /**
          * Workspaces the current edit is applied to alongside the global layer.
          *
@@ -472,8 +472,10 @@ window.__ModuleLoader__.load({
          * additive behaviour users expect from a multi-select. Editing the global
          * layer with workspaces selected writes the same checklist to each of
          * them, which is how one policy reaches several projects at once.
+         * The global layer starts selected; deselecting it makes the edit apply
+         * to the chosen workspaces only.
          */
-        const [selected, setSelected] = useState([])
+        const [selected, setSelected] = useState(['global'])
 
         const allLayers = useMemo(() => [
           { id: 'global', label: strings.global, hint: strings.globalHint, count: countOf(trim.globalScope) },
@@ -498,20 +500,24 @@ window.__ModuleLoader__.load({
             : [...current, id])
         }, [])
 
-        const active = 'global'
         const scope = trim.globalScope
 
         /**
          * Write one checklist to the global layer and every selected workspace.
-         * This is the multi-select write; a single-layer edit goes through the
-         * same path with an empty selection.
+         *
+         * The global layer is written when it is part of the selection, so
+         * deselecting 全局 makes the edit apply to the chosen workspaces only.
          */
         const onScope = next => {
-          trim.setGlobalScope(next)
-          if (liveSelected.length === 0) return
+          // With nothing selected there is no target; treat the global layer as
+          // the implicit target rather than discarding the edit silently.
+          const targets = liveSelected.length === 0 ? ['global'] : liveSelected
+          if (targets.includes('global')) trim.setGlobalScope(next)
+          const others = targets.filter(id => id !== 'global')
+          if (others.length === 0) return
           trim.setWorkspaces(current => {
             const updated = { ...current }
-            for (const path of liveSelected) updated[path] = { ...next }
+            for (const path of others) updated[path] = { ...next }
             return updated
           })
         }
@@ -522,14 +528,20 @@ window.__ModuleLoader__.load({
         }
 
         return h(TrimEditor, {
-          layer: active, setLayer: id => { setLayer(id); setSelected([]) },
-          layers: allLayers, state: trim.state, scope, onScope,
+          layer: liveSelected.includes('global') ? 'global' : (liveSelected[0] ?? 'global'),
+          setLayer: id => setSelected([id]),
+          layers: allLayers, state: trim.state,
+          // The checklist edits the global layer when 全局 is selected; otherwise
+          // it edits the first selected workspace, which is what the readout
+          // names. Multi-target writes still hit every selection.
+          scope: liveSelected.includes('global') ? scope : asScope(trim.workspaces[liveSelected[0]]),
+          onScope,
           onSave: trim.save, busy: trim.busy,
           error: trim.error === 'route-missing' ? strings.routeMissing : trim.error,
           notice: trim.saved ? strings.saved : '',
           strings,
           multiSelect: true,
-          selected: new Set([active, ...liveSelected]),
+          selected: new Set(liveSelected),
           onToggleLayer: toggleLayer,
         })
       }
