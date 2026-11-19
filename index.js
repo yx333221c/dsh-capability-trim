@@ -369,6 +369,9 @@ export function apply(ctx) {
       id: workspace.id,
       path: workspace.path,
       title: workspace.title,
+      // The panel needs to map a Session to its workspace directory; the slot
+      // props do not carry one, so the association travels with the state.
+      sessionIds: [...workspace.sessionIds].map(String),
       scope: state.workspaces.get(pathKey(workspace.path)) ?? emptyScope(),
     }))
   }

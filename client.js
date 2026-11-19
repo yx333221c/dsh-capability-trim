@@ -7,7 +7,7 @@
  * - a Conversation View tab that edits the current Session and its workspace.
  *
  * Effective scope layers as `session > workspace > global`. The save bar sits
- * outside the scrolling area so it is reachable without scrolling.
+ * outside the scrolling area so it is always reachable.
  */
 
 window.__ModuleLoader__.load({
@@ -15,7 +15,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const h = React.createElement
-    const { useCallback, useEffect, useMemo, useState } = React
+    const { useCallback, useEffect, useMemo, useState, useSyncExternalStore } = React
 
     const ROUTE = '/capability-trim/api/state'
     const EMPTY = { denyTools: [], denySkills: [], denyInstructions: [] }
@@ -23,10 +23,9 @@ window.__ModuleLoader__.load({
     /**
      * Read the Host state, optionally focused on one workspace directory.
      *
-     * A `404` here means the Host half has not registered its route yet — the
-     * page loaded before the plugin row activated, or the row was just disabled.
-     * Reporting that as a plain status number is what made the earlier failure
-     * unreadable, so the message names the cause instead.
+     * A `404` means the Host half has not registered its route yet — the page
+     * loaded before the row activated, or the row was just disabled. Reporting
+     * the bare status is what made that failure unreadable once already.
      */
     async function readState(cwd) {
       const query = typeof cwd === 'string' && cwd !== '' ? `?workspace=${encodeURIComponent(cwd)}` : ''
@@ -36,19 +35,15 @@ window.__ModuleLoader__.load({
         headers: { accept: 'application/json' },
       })
       if (response.status === 404) {
-        throw new Error('the Host half of Capability trim is not loaded (route 404): enable the plugin in Settings → Plugins, then reload the page')
+        const failure = new Error('host-route-missing')
+        failure.routeMissing = true
+        throw failure
       }
       if (!response.ok) throw new Error(`the Host answered ${response.status}`)
       return response.json()
     }
 
-    /**
-     * Read the state, retrying briefly while the route is still missing.
-     *
-     * The page can render before the Host row finishes activating, and the row
-     * can be re-enabled while this component stays mounted; a single attempt
-     * turns both cases into a permanent error.
-     */
+    /** Retry briefly while the Host route is still absent. */
     async function readStateWithRetry(cwd, attempts = 4) {
       let last
       for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -56,8 +51,7 @@ window.__ModuleLoader__.load({
           return await readState(cwd)
         } catch (cause) {
           last = cause
-          const retryable = String(cause?.message ?? '').includes('404')
-          if (!retryable) throw cause
+          if (cause?.routeMissing !== true && !String(cause?.message ?? '').includes('404')) throw cause
           await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)))
         }
       }
@@ -124,16 +118,36 @@ window.__ModuleLoader__.load({
       return { ...scope, [field]: on ? [...rest, name] : rest }
     }
 
+    /** Union of two scopes, used to seed a narrower layer from a broader one. */
+    function mergeScopes(base, overlay) {
+      const union = (field) => {
+        const seen = new Set()
+        const result = []
+        for (const entry of [...(base?.[field] ?? []), ...(overlay?.[field] ?? [])]) {
+          const key = entry.toLowerCase()
+          if (seen.has(key)) continue
+          seen.add(key)
+          result.push(entry)
+        }
+        return result
+      }
+      return {
+        denyTools: union('denyTools'),
+        denySkills: union('denySkills'),
+        denyInstructions: union('denyInstructions'),
+      }
+    }
+
     const S = {
       page: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, color: 'var(--dsw-alias-text-primary)' },
-      body: { flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '16px 18px 8px', display: 'flex', flexDirection: 'column', gap: 14 },
+      body: { flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '16px 18px 8px', display: 'flex', flexDirection: 'column', gap: 12 },
       footer: {
         flex: '0 0 auto', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
         padding: '10px 18px', borderTop: '1px solid var(--dsw-alias-border-subtle)',
         background: 'var(--dsw-alias-bg-elevated)',
       },
       lead: { margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--dsw-alias-text-secondary)' },
-      grid: { display: 'grid', gridTemplateColumns: 'minmax(160px, 210px) minmax(0, 1fr)', gap: 14, alignItems: 'start' },
+      grid: { display: 'grid', gridTemplateColumns: 'minmax(150px, 200px) minmax(0, 1fr)', gap: 12, alignItems: 'start' },
       card: {
         border: '1px solid var(--dsw-alias-border-subtle)', borderRadius: 10,
         background: 'var(--dsw-alias-bg-elevated)', padding: 12, minWidth: 0,
@@ -167,27 +181,76 @@ window.__ModuleLoader__.load({
         border: '1px solid var(--dsw-alias-border-strong)', background: 'transparent',
         color: 'var(--dsw-alias-text-primary)',
       },
-      scroll: { maxHeight: 220, overflowY: 'auto', border: '1px solid var(--dsw-alias-border-subtle)', borderRadius: 8, padding: 4 },
-      toolbar: { display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 2 },
+      scroll: { maxHeight: 210, overflowY: 'auto', border: '1px solid var(--dsw-alias-border-subtle)', borderRadius: 8, padding: 4 },
+      toolbar: { display: 'flex', gap: 6, flexWrap: 'wrap' },
+      tag: { fontSize: 11, padding: '1px 7px', borderRadius: 999, background: 'var(--dsw-alias-bg-selected)', color: 'var(--dsw-alias-text-secondary)' },
     }
 
-    /** Localised labels, re-read on every render so a language switch is live. */
-    function labelsOf(locale) {
-      let id = ''
-      try {
-        id = String(locale?.getLocale?.()?.id ?? '')
-      } catch {
-        id = ''
-      }
-      const zh = id.toLowerCase().startsWith('zh')
+    /**
+     * Localised strings.
+     *
+     * `LocaleSnapshot` exposes `active`, not `id`; reading the wrong field is why
+     * an earlier build never left English. The snapshot is also read through
+     * `subscribe`, so a language switch re-renders instead of waiting for a
+     * remount.
+     */
+    function stringsFor(activeId) {
+      const zh = String(activeId ?? '').toLowerCase().startsWith('zh')
       return {
         panel: zh ? '能力裁剪' : 'Capability trim',
-        global: zh ? '全局' : 'Global',
+        global: zh ? '全局（所有工作区的默认）' : 'Global (default for every workspace)',
         session: zh ? '本会话' : 'This session',
         workspace: zh ? '本工作区' : 'This workspace',
         saved: zh ? '已保存并应用。' : 'Saved and applied.',
         loading: zh ? '加载中…' : 'Loading…',
+        routeMissing: zh ? '宿主半边未加载（路由 404）：请在「设置 → 插件」中启用能力裁剪，然后刷新页面。' : 'The Host half is not loaded (route 404): enable Capability trim in Settings → Plugins, then reload.',
+        configuredIn: zh ? '配置对象' : 'Configured in',
+        hiddenIn: zh ? '本层隐藏的能力' : 'Hidden in this layer',
+        hidden: zh ? '已隐藏' : 'hidden',
+        clearLayer: zh ? '清空本层' : 'Clear this layer',
+        save: zh ? '保存并应用' : 'Save and apply',
+        saving: zh ? '保存中…' : 'Saving…',
+        saveHint: zh ? '运行中的会话也会立即生效。' : 'Applies to running sessions too.',
+        tools: zh ? '工具' : 'Tools',
+        skills: zh ? '技能' : 'Skills',
+        instructions: zh ? '指令文件' : 'Instruction files',
+        filterTools: zh ? '筛选工具…' : 'Filter tools…',
+        noTool: zh ? '该层尚未注册任何工具。' : 'No tool is registered.',
+        noToolMatch: zh ? '没有工具匹配该筛选。' : 'No tool matches this filter.',
+        noSkill: zh ? '没有可被模型调用的技能。' : 'No model-invocable skill is registered.',
+        noInstruction: zh ? '这个工作区里没有找到指令文件。' : 'No instruction file was found in this workspace.',
+        nothing: zh ? '暂无可配置对象。' : 'Nothing to configure yet.',
+        untick: zh ? '取消勾选 = 在本层隐藏。' : 'Unticked means hidden in this layer.',
+        seed: zh ? '预填本工作区设置' : 'Seed from workspace',
+        seeded: zh ? '已用本工作区的设置预填本会话。' : 'Seeded this session from its workspace.',
+        selectWorkspace: zh ? '先在左侧选择一个工作区。' : 'Select a workspace on the left first.',
+        lead: zh
+          ? '把属于其他项目的能力收起来。隐藏按层生效：会话覆盖工作区，工作区覆盖全局默认。配置不写入 profile，因此清空某层即刻复原。'
+          : 'Hide capabilities that belong to other projects. Hiding is layered: a session overrides its workspace, which overrides the global default. Nothing is written to the profile, so clearing a layer restores it immediately.',
+        note: zh
+          ? '隐藏工具会把它从新步骤的模型工具列表中移除；隐藏技能会去掉它的目录条目；隐藏指令文件会把该段从注入的工作区上下文中裁掉。只有全局注册的工具才能真正隐藏——preset 自带作用域里的工具仍可见。'
+          : 'Hiding a tool removes it from the model tool list for new steps; hiding a skill removes its catalog entry; hiding an instruction file cuts that section out of the injected context. Only globally registered tools can actually be hidden — tools registered inside the preset’s own scope stay visible.',
       }
+    }
+
+    /** Subscribe to the locale snapshot so a language switch is reflected live. */
+    function useStrings(locale) {
+      const subscribe = useCallback(listener => {
+        if (locale === undefined) return () => {}
+        if (typeof locale.subscribe === 'function') return locale.subscribe(listener)
+        return () => {}
+      }, [locale])
+
+      const getSnapshot = useCallback(() => {
+        try {
+          return String(locale?.getLocale?.()?.active ?? '')
+        } catch {
+          return ''
+        }
+      }, [locale])
+
+      const active = useSyncExternalStore(subscribe, getSnapshot, () => '')
+      return useMemo(() => stringsFor(active), [active])
     }
 
     /** One checkbox row. */
@@ -198,10 +261,11 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The shared editor: a layer column plus three checklists, with the save bar
-     * pinned outside the scrolling area.
+     * The shared editor. `layers` is the full ordered list; `layer` is the
+     * currently selected id, and selection is always one of them, so switching
+     * is reversible by clicking another row rather than getting stuck.
      */
-    function TrimEditor({ layer, setLayer, layers, state, scope, onScope, onSave, busy, error, notice, labels }) {
+    function TrimEditor({ layer, setLayer, layers, state, scope, onScope, onSave, busy, error, notice, strings, extras }) {
       const [filter, setFilter] = useState('')
 
       const tools = state?.tools ?? []
@@ -211,66 +275,71 @@ window.__ModuleLoader__.load({
         ? tools
         : tools.filter(name => name.toLowerCase().includes(filter.toLowerCase()))
       const hidden = countOf(scope)
+      const current = layers.find(entry => entry.id === layer)
 
       return h('div', { style: S.page },
         h('div', { style: S.body },
-          h('p', { style: S.lead },
-            'Hide capabilities that belong to other projects. Hiding happens per layer: a session overrides its ',
-            'workspace, which overrides the global default. Nothing is written to the profile configuration, so ',
-            'clearing a layer here restores the surface immediately.'),
+          h('p', { style: S.lead }, strings.lead),
 
           h('div', { style: S.grid },
             h('section', { style: S.card },
-              h('h3', { style: S.title }, 'Configured in'),
+              h('h3', { style: S.title }, strings.configuredIn),
               layers.length === 0
-                ? h('p', { style: S.muted }, 'Nothing to configure yet.')
+                ? h('p', { style: S.muted }, strings.nothing)
                 : h('ul', { style: S.list }, layers.map(entry => h('li', { key: entry.id },
                   h('button', {
                     type: 'button',
+                    'aria-pressed': entry.id === layer,
                     style: { ...S.navRow, ...(entry.id === layer ? S.navActive : {}) },
                     onClick: () => setLayer(entry.id),
                   },
                     h('span', { style: { display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 } },
                       h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, entry.label),
-                      entry.count > 0 ? h('span', { style: S.pill }, `${entry.count}`) : null),
-                    entry.hint === undefined ? null : h('span', { style: S.path, title: entry.hint }, entry.hint)))))),
+                      entry.count > 0 ? h('span', { style: S.pill }, String(entry.count)) : null),
+                    entry.hint === undefined ? null : h('span', { style: S.path, title: entry.hint }, entry.hint))))),
 
             h('section', { style: S.card },
               h('div', { style: { ...S.row, justifyContent: 'space-between', marginBottom: 8 } },
-                h('h3', { style: { ...S.title, margin: 0 } }, 'Hidden in this layer'),
-                h('span', { style: S.pill }, `${hidden} hidden`)),
+                h('h3', { style: { ...S.title, margin: 0 } }, strings.hiddenIn),
+                h('span', { style: S.pill }, `${hidden} ${strings.hidden}`)),
+
+              current !== undefined && current.hint !== undefined
+                ? h('p', { style: S.path, title: current.hint }, current.hint)
+                : null,
+
+              extras === undefined ? null : h('div', { style: { ...S.toolbar, marginBottom: 8 } }, extras),
 
               h('div', { style: { ...S.row, marginBottom: 10 } },
                 h('input', {
-                  type: 'search', value: filter, placeholder: 'Filter tools…', style: S.search,
+                  type: 'search', value: filter, placeholder: strings.filterTools, style: S.search,
                   onChange: event => setFilter(event.target.value),
                 }),
                 h('button', {
                   type: 'button', style: S.button, disabled: hidden === 0,
                   onClick: () => onScope({ ...EMPTY }),
-                }, 'Clear this layer')),
+                }, strings.clearLayer)),
 
-              h('h4', { style: S.title }, `Tools (${filteredTools.length})`),
+              h('h4', { style: S.title }, `${strings.tools} (${filteredTools.length})`),
               filteredTools.length === 0
-                ? h('p', { style: S.muted }, tools.length === 0 ? 'No tool is registered.' : 'No tool matches this filter.')
+                ? h('p', { style: S.muted }, tools.length === 0 ? strings.noTool : strings.noToolMatch)
                 : h('div', { style: S.scroll }, filteredTools.map(name => h(Check, {
                   key: name, label: name, mono: true,
                   checked: matchesAny(scope.denyTools, name),
                   onChange: on => onScope(toggle(scope, 'denyTools', name, on)),
                 }))),
 
-              h('h4', { style: { ...S.title, marginTop: 14 } }, `Skills (${skills.length})`),
+              h('h4', { style: { ...S.title, marginTop: 12 } }, `${strings.skills} (${skills.length})`),
               skills.length === 0
-                ? h('p', { style: S.muted }, 'No model-invocable skill is registered.')
+                ? h('p', { style: S.muted }, strings.noSkill)
                 : h('div', { style: S.scroll }, skills.map(skill => h(Check, {
                   key: skill.name, label: skill.name, mono: true,
                   checked: matchesAny(scope.denySkills, skill.name),
                   onChange: on => onScope(toggle(scope, 'denySkills', skill.name, on)),
                 }))),
 
-              h('h4', { style: { ...S.title, marginTop: 14 } }, `Instruction files (${instructions.length})`),
+              h('h4', { style: { ...S.title, marginTop: 12 } }, `${strings.instructions} (${instructions.length})`),
               instructions.length === 0
-                ? h('p', { style: S.muted }, 'No instruction file was found in this workspace.')
+                ? h('p', { style: S.muted }, strings.noInstruction)
                 : h('div', { style: S.scroll }, instructions.map(file => h(Check, {
                   key: file.path, label: file.path, mono: true,
                   checked: deniesInstruction(scope.denyInstructions, file.path),
@@ -280,16 +349,14 @@ window.__ModuleLoader__.load({
           error !== '' ? h('p', { style: S.error }, error) : null,
           notice !== '' ? h('p', { style: S.ok }, notice) : null,
 
-          h('div', { style: S.note },
-            'Hiding a tool removes it from the model’s tool list for new steps; hiding a skill removes its catalog ',
-            'entry; hiding an instruction file cuts that section out of the injected workspace context.')),
+          h('div', { style: S.note }, strings.note)),
 
         h('div', { style: S.footer },
           h('button', {
             type: 'button', style: { ...S.button, ...S.primary, opacity: busy ? 0.6 : 1 },
             onClick: onSave, disabled: busy,
-          }, busy ? 'Saving…' : 'Save and apply'),
-          h('span', { style: S.muted }, 'Applies to running sessions too.')))
+          }, busy ? strings.saving : strings.save),
+          h('span', { style: S.muted }, strings.saveHint))))
     }
 
     /** Shared loader and saver for both surfaces. */
@@ -299,12 +366,13 @@ window.__ModuleLoader__.load({
       const [workspaces, setWorkspaces] = useState({})
       const [sessions, setSessions] = useState({})
       const [error, setError] = useState('')
-      const [notice, setNotice] = useState('')
+      const [saved, setSaved] = useState(false)
       const [busy, setBusy] = useState(false)
 
-      const reload = useCallback(async () => {
+      const reload = useCallback(async (target) => {
+        const focus = target === undefined ? cwd : target
         try {
-          const data = await readStateWithRetry(cwd)
+          const data = await readStateWithRetry(focus)
           setState(data)
           setGlobalScope(asScope(data.global))
           const byPath = {}
@@ -315,7 +383,7 @@ window.__ModuleLoader__.load({
           setSessions(bySession)
           setError('')
         } catch (cause) {
-          setError(cause.message ?? String(cause))
+          setError(cause?.routeMissing === true ? 'route-missing' : (cause.message ?? String(cause)))
         }
       }, [cwd])
 
@@ -324,7 +392,7 @@ window.__ModuleLoader__.load({
       const save = useCallback(async () => {
         setBusy(true)
         setError('')
-        setNotice('')
+        setSaved(false)
         try {
           const pick = source => {
             const result = {}
@@ -338,7 +406,7 @@ window.__ModuleLoader__.load({
             workspaces: pick(workspaces),
             sessions: pick(sessions),
           })
-          setNotice('saved')
+          setSaved(true)
           await reload()
         } catch (cause) {
           setError(cause.message ?? String(cause))
@@ -347,93 +415,131 @@ window.__ModuleLoader__.load({
         }
       }, [workspaces, sessions, globalScope, reload])
 
-      return { state, globalScope, setGlobalScope, workspaces, setWorkspaces, sessions, setSessions, error, notice, busy, save }
+      return { state, globalScope, setGlobalScope, workspaces, setWorkspaces, sessions, setSessions, error, saved, busy, save, reload }
     }
 
-    /** The sidebar panel: global layer plus every registered workspace. */
+    /** The sidebar panel: the global layer plus every registered workspace. */
     function makePanel(locale) {
       return function Panel() {
-        const labels = labelsOf(locale)
+        const strings = useStrings(locale)
         const trim = useTrim(undefined)
         const [layer, setLayer] = useState('global')
 
         const layers = useMemo(() => [
-          { id: 'global', label: labels.global, count: countOf(trim.globalScope) },
+          { id: 'global', label: strings.global, count: countOf(trim.globalScope) },
           ...(trim.state?.workspaces ?? []).map(workspace => ({
             id: workspace.path,
             label: workspace.title || workspace.path,
             hint: workspace.path,
             count: countOf(trim.workspaces[workspace.path]),
           })),
-        ], [labels.global, trim.state, trim.globalScope, trim.workspaces])
+        ], [strings.global, trim.state, trim.globalScope, trim.workspaces])
 
-        const scope = layer === 'global' ? trim.globalScope : asScope(trim.workspaces[layer])
+        // A workspace can disappear between renders; fall back to global rather
+        // than rendering an editor bound to no layer.
+        const active = layers.some(entry => entry.id === layer) ? layer : 'global'
+        const scope = active === 'global' ? trim.globalScope : asScope(trim.workspaces[active])
         const onScope = next => {
-          if (layer === 'global') trim.setGlobalScope(next)
-          else trim.setWorkspaces(current => ({ ...current, [layer]: next }))
+          if (active === 'global') trim.setGlobalScope(next)
+          else trim.setWorkspaces(current => ({ ...current, [active]: next }))
         }
 
         if (trim.state === null) {
-          return h('p', { style: { ...S.muted, padding: 16 } }, trim.error !== '' ? trim.error : labels.loading)
+          const message = trim.error === 'route-missing' ? strings.routeMissing : (trim.error !== '' ? trim.error : strings.loading)
+          return h('p', { style: { ...S.muted, padding: 16 } }, message)
         }
+
         return h(TrimEditor, {
-          layer, setLayer, layers, state: trim.state, scope, onScope,
+          layer: active, setLayer, layers, state: trim.state, scope, onScope,
           onSave: trim.save, busy: trim.busy,
-          error: trim.error, notice: trim.notice === 'saved' ? labels.saved : '', labels,
+          error: trim.error === 'route-missing' ? strings.routeMissing : trim.error,
+          notice: trim.saved ? strings.saved : '',
+          strings,
         })
       }
     }
 
-    /** The Conversation View tab: this session, its workspace, and global. */
+    /** The Conversation View tab: this session, its workspace, and the global layer. */
     function makeSessionView(locale) {
       return function SessionView(props) {
-        const labels = labelsOf(locale)
+        const strings = useStrings(locale)
         const sessionId = props.sessionId === undefined ? undefined : String(props.sessionId)
-        const [cwd, setCwd] = useState(undefined)
-        const trim = useTrim(cwd)
+
+        const trim = useTrim()
         const [layer, setLayer] = useState('session')
 
-        useEffect(() => {
-          let live = true
-          const workspaces = props.useWorkspaces
-          if (workspaces === undefined) return () => { live = false }
-          let snapshot
-          try {
-            snapshot = workspaces()
-          } catch {
-            return () => { live = false }
+        /**
+         * Resolve this Session's workspace directory from the state itself.
+         *
+         * The View slot's standard props carry no workspace directory, and
+         * `useWorkspaces` is not guaranteed to expose one per Session here, so
+         * the association travels with the Host state (`sessionIds`) instead of
+         * being guessed.
+         */
+        const cwd = useMemo(() => {
+          if (sessionId === undefined) return undefined
+          for (const workspace of trim.state?.workspaces ?? []) {
+            if ((workspace.sessionIds ?? []).includes(sessionId)) return workspace.path
           }
-          const list = snapshot?.workspaces ?? []
-          const match = list.find(workspace => (workspace.sessionIds ?? []).some(id => String(id) === sessionId))
-          if (live && match !== undefined) setCwd(match.path)
-          return () => { live = false }
-        }, [props.useWorkspaces, sessionId])
+          return undefined
+        }, [trim.state, sessionId])
+
+        // Skill and instruction discovery follow the resolved workspace, so the
+        // lists the user ticks are the ones this Session actually sees.
+        useEffect(() => {
+          if (cwd !== undefined) void trim.reload(cwd)
+        }, [cwd, trim.reload])
 
         const layers = useMemo(() => [
-          { id: 'session', label: labels.session, hint: sessionId, count: countOf(trim.sessions[sessionId]) },
-          { id: 'workspace', label: labels.workspace, hint: cwd, count: countOf(trim.workspaces[cwd]) },
-          { id: 'global', label: labels.global, count: countOf(trim.globalScope) },
-        ], [labels.session, labels.workspace, labels.global, sessionId, cwd, trim.sessions, trim.workspaces, trim.globalScope])
+          { id: 'session', label: strings.session, hint: sessionId, count: countOf(trim.sessions[sessionId]) },
+          { id: 'workspace', label: strings.workspace, hint: cwd, count: countOf(trim.workspaces[cwd]) },
+          { id: 'global', label: strings.global, count: countOf(trim.globalScope) },
+        ], [strings.session, strings.workspace, strings.global, sessionId, cwd, trim.sessions, trim.workspaces, trim.globalScope])
 
-        const scope = layer === 'session'
+        const active = layers.some(entry => entry.id === layer) ? layer : 'session'
+        const scope = active === 'session'
           ? asScope(trim.sessions[sessionId])
-          : layer === 'workspace'
+          : active === 'workspace'
             ? asScope(trim.workspaces[cwd])
             : trim.globalScope
 
         const onScope = next => {
-          if (layer === 'session') trim.setSessions(current => ({ ...current, [sessionId]: next }))
-          else if (layer === 'workspace') trim.setWorkspaces(current => ({ ...current, [cwd]: next }))
+          if (active === 'session') trim.setSessions(current => ({ ...current, [sessionId]: next }))
+          else if (active === 'workspace') trim.setWorkspaces(current => ({ ...current, [cwd]: next }))
           else trim.setGlobalScope(next)
         }
 
+        /**
+         * Seed this session from its workspace: copy whatever the workspace
+         * layer hides, so a narrower layer starts complete instead of needing
+         * every entry re-ticked by hand.
+         */
+        const seed = useCallback(() => {
+          const workspaceScope = asScope(trim.workspaces[cwd])
+          const merged = mergeScopes(workspaceScope, asScope(trim.sessions[sessionId]))
+          trim.setSessions(current => ({ ...current, [sessionId]: merged }))
+        }, [cwd, sessionId, trim])
+
+        const seedButton = cwd === undefined
+          ? null
+          : h('button', {
+            type: 'button', style: S.button, onClick: seed,
+            disabled: countOf(trim.workspaces[cwd]) === 0,
+            title: strings.seeded,
+          }, strings.seed)
+
         if (trim.state === null) {
-          return h('p', { style: { ...S.muted, padding: 16 } }, trim.error !== '' ? trim.error : labels.loading)
+          const message = trim.error === 'route-missing' ? strings.routeMissing : (trim.error !== '' ? trim.error : strings.loading)
+          return h('p', { style: { ...S.muted, padding: 16 } }, message)
         }
+
         return h(TrimEditor, {
-          layer, setLayer, layers, state: trim.state, scope, onScope,
+          layer: active, setLayer, layers, state: trim.state, scope, onScope,
           onSave: trim.save, busy: trim.busy,
-          error: trim.error, notice: trim.notice === 'saved' ? labels.saved : '', labels,
+          error: trim.error === 'route-missing' ? strings.routeMissing : trim.error,
+          notice: trim.saved ? strings.saved : '',
+          strings,
+          extras: active === 'session' ? [seedButton] : undefined,
         })
       }
     }
@@ -455,9 +561,9 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots', 'locale'],
       apply(ctx) {
-        const label = () => labelsOf(ctx.locale).panel
         const Panel = makePanel(ctx.locale)
         const SessionView = makeSessionView(ctx.locale)
+        const label = () => stringsFor(safeActive(ctx.locale)).panel
 
         // Main (global) surface: a sidebar panel icon plus its page.
         ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
@@ -480,6 +586,15 @@ window.__ModuleLoader__.load({
           label,
         }, SessionView))
       },
+    }
+
+    /** Read the active locale id defensively; the snapshot field is `active`. */
+    function safeActive(locale) {
+      try {
+        return String(locale?.getLocale?.()?.active ?? '')
+      } catch {
+        return ''
+      }
     }
   },
 })
