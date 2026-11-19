@@ -36,11 +36,18 @@ window.__ModuleLoader__.load({
   outline: 2px solid var(--dsw-alias-accent-fill, #1f6feb);
   outline-offset: 2px;
 }
-.${ROOT_CLASS} .ct-chip:hover { border-color: var(--dsw-alias-border-strong); }
+.${ROOT_CLASS} .ct-chip {
+  border-color: var(--dsw-alias-border-strong);
+  background: var(--dsw-alias-bg-elevated);
+}
+.${ROOT_CLASS} .ct-chip:hover { border-color: var(--dsw-alias-accent-fill, #1f6feb); }
 .${ROOT_CLASS} .ct-chip[data-active="true"] {
   background: var(--dsw-alias-bg-selected);
-  border-color: var(--dsw-alias-border-strong);
+  border-color: var(--dsw-alias-accent-fill, #1f6feb);
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-accent-fill, #1f6feb);
 }
+.${ROOT_CLASS} .ct-chip .ct-tick { visibility: hidden; }
+.${ROOT_CLASS} .ct-chip[data-active="true"] .ct-tick { visibility: visible; }
 .${ROOT_CLASS} .ct-check:hover { background: var(--dsw-alias-bg-selected); }
 `
 
@@ -168,9 +175,15 @@ window.__ModuleLoader__.load({
       chipRow: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' },
       chip: {
         display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: '100%',
-        padding: '5px 11px', borderRadius: 999, border: '1px solid var(--dsw-alias-border-subtle)',
-        background: 'transparent', color: 'var(--dsw-alias-text-primary)',
+        padding: '5px 11px', borderRadius: 999, border: '1px solid var(--dsw-alias-border-strong)',
+        background: 'var(--dsw-alias-bg-elevated)', color: 'var(--dsw-alias-text-primary)',
         font: 'inherit', fontSize: 13, cursor: 'pointer',
+      },
+      chipActive: {
+        background: 'var(--dsw-alias-bg-selected)',
+        borderColor: 'var(--dsw-alias-accent-fill, #1f6feb)',
+        boxShadow: 'inset 0 0 0 1px var(--dsw-alias-accent-fill, #1f6feb)',
+        fontWeight: 600,
       },
       chipLabel: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 260 },
       badge: { fontSize: 11, padding: '0 6px', borderRadius: 999, background: 'var(--dsw-alias-bg-selected)', color: 'var(--dsw-alias-text-secondary)' },
@@ -217,6 +230,8 @@ window.__ModuleLoader__.load({
           ? '宿主半边未加载（路由 404）：请在「设置 → 插件」中启用能力裁剪，然后刷新页面。'
           : 'The Host half is not loaded (route 404): enable Capability trim in Settings → Plugins, then reload.',
         hiddenIn: zh ? '本层隐藏的能力' : 'Hidden in this layer',
+        showing: zh ? '当前正在配置' : 'Editing',
+        nothingHidden: zh ? '本层未隐藏任何能力' : 'nothing hidden in this layer',
         hidden: zh ? '已隐藏' : 'hidden',
         clearLayer: zh ? '清空本层' : 'Clear this layer',
         save: zh ? '保存并应用' : 'Save and apply',
@@ -294,16 +309,30 @@ window.__ModuleLoader__.load({
               type: 'button',
               className: 'ct-chip',
               'data-active': entry.id === layer ? 'true' : 'false',
+              'aria-pressed': entry.id === layer,
               title: entry.hint,
-              style: S.chip,
+              // Selection is expressed inline, not only through the class rule:
+              // the inline style object wins over the stylesheet, so a
+              // class-only active state would never paint.
+              style: entry.id === layer ? { ...S.chip, ...S.chipActive } : S.chip,
               onClick: () => setLayer(entry.id),
             },
+              h('span', { 'aria-hidden': true, style: { fontSize: 12, lineHeight: 1, opacity: entry.id === layer ? 1 : 0 } }, '✓'),
               h('span', { style: S.chipLabel }, entry.label),
               entry.count > 0 ? h('span', { style: S.badge }, String(entry.count)) : null))),
 
           current !== undefined && current.hint !== undefined
             ? h('p', { style: S.path, title: current.hint }, current.hint)
             : null,
+
+          h('p', { style: S.path },
+            `${strings.showing}: ${current === undefined ? '—' : current.label}`,
+            hidden === 0
+              ? ` · ${strings.nothingHidden}`
+              : ` · ${[scope.denyTools.length !== 0 ? `${scope.denyTools.length} ${strings.tools.toLowerCase()}` : '',
+                scope.denySkills.length !== 0 ? `${scope.denySkills.length} ${strings.skills.toLowerCase()}` : '',
+                scope.denyInstructions.length !== 0 ? `${scope.denyInstructions.length} ${strings.instructions.toLowerCase()}` : '']
+                .filter(Boolean).join(', ')}`),
 
           h('section', { style: S.card },
             h('div', { style: S.subtitleRow },
