@@ -154,7 +154,13 @@ export function apply(ctx) {
       const skills = ctx.get('skills')
       if (skills !== undefined && scope.denySkills.length > 0) {
         const cwd = directoryOf(agent)
-        const catalog = await skills.list(cwd === undefined ? {} : { cwd })
+        // The scope is required: without it the registry merges only its global
+        // layer, so user and project skills from the preset-registered provider
+        // are invisible and a deny rule silently matches nothing.
+        const catalog = await skills.list({
+          ...cwd === undefined ? {} : { cwd },
+          scope: agent,
+        })
         for (const summary of catalog) {
           if (!matchesAny(scope.denySkills, summary.name)) continue
           // A scoped registration with the same name wins outright in this
@@ -340,14 +346,29 @@ export function apply(ctx) {
     return found
   }
 
-  /** Everything the panel needs to render a checklist for one workspace. */
-  const surface = async cwd => {
+  /**
+   * Everything the panel needs to render a checklist for one workspace.
+   *
+   * `scope` is not optional in spirit: the skill registry merges a global layer
+   * with the viewing scope's chain, and the filesystem provider — which supplies
+   * every user and project skill — is registered inside an agent preset's layer.
+   * A read without a scope therefore sees only the deployment-wide bundled
+   * skills, which is why an unscoped panel showed 5 while a session had 16.
+   *
+   * @param {string | undefined} cwd
+   * @param {any | undefined} scope a live Agent to view the catalog through
+   */
+  const surface = async (cwd, scope) => {
     const skills = ctx.get('skills')
     let skillSummaries = []
     let skillError
     if (skills !== undefined) {
       try {
-        const catalog = await skills.list(cwd === undefined ? {} : { cwd })
+        const options = {
+          ...cwd === undefined ? {} : { cwd },
+          ...scope === undefined ? {} : { scope },
+        }
+        const catalog = await skills.list(options)
         skillSummaries = catalog
           .filter(summary => summary.invocation.modelInvocable)
           .map(summary => ({ name: summary.name, description: summary.description }))
@@ -364,8 +385,31 @@ export function apply(ctx) {
       tools: knownToolNames().sort(),
       skills: skillSummaries,
       ...skillError === undefined ? {} : { skillError },
+      ...scope === undefined ? {} : { skillScope: 'agent' },
       instructions: await instructionFiles(cwd),
     }
+  }
+
+  /**
+   * A live Agent to read the catalog through when the caller names none.
+   *
+   * The panel is a Host route with no Agent of its own, so it borrows any live
+   * session's scope. That is the closest thing to "what a session here sees"
+   * and it is the only way the preset-registered provider is reachable.
+   *
+   * @param {string | undefined} preferredCwd prefer an Agent working in this directory
+   */
+  const anyAgent = preferredCwd => {
+    const agents = ctx.get('agents')
+    if (agents === undefined) return undefined
+    const live = agents.list()
+    if (live.length === 0) return undefined
+    if (preferredCwd === undefined) return live[0]
+    const key = pathKey(preferredCwd)
+    for (const agent of live) {
+      if (pathKey(directoryOf(agent) ?? '') === key) return agent
+    }
+    return live[0]
   }
 
   /** Registry workspaces plus each one's own scope. */
@@ -403,7 +447,7 @@ export function apply(ctx) {
           global: state.global,
           workspaces: workspaceView(),
           sessions: Object.fromEntries(state.sessions),
-          ...await surface(focus),
+          ...await surface(focus, anyAgent(focus)),
         })
         return
       }
