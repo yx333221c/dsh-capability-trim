@@ -324,9 +324,21 @@ export function apply(ctx) {
             ...agent === undefined ? {} : { scope: agent },
           }
           const catalog = await skills.list(options)
-          skillSummaries = catalog
-            .filter(summary => summary.invocation.modelInvocable)
-            .map(summary => ({ name: summary.name, description: summary.description }))
+          // Do NOT filter on modelInvocable here.
+          //
+          // Hiding a skill works by registering a shadow with modelInvocable:false,
+          // and that shadow wins for the Agent whose scope sees it. Filtering this
+          // list the same way therefore removed a hidden skill from the panel —
+          // the switch that turned it off disappeared with it, and there was no
+          // way to turn it back on. The panel must list everything the registry
+          // can resolve, and let the switch express the hidden state instead.
+          const seen = new Set()
+          skillSummaries = []
+          for (const summary of catalog) {
+            if (seen.has(summary.name)) continue
+            seen.add(summary.name)
+            skillSummaries.push({ name: summary.name, description: summary.description })
+          }
         } catch (error) {
           // An empty list and a failed discovery look identical in the panel, so
           // the failure travels to it rather than being swallowed.

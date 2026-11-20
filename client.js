@@ -204,6 +204,24 @@ window.__ModuleLoader__.load({
       return useMemo(() => stringsFor(active), [active])
     }
 
+    /**
+     * Whether the current Session has not started a task yet.
+     *
+     * `useSession` is the slot's own selector hook: calling it subscribes this
+     * component, so no extra polling is needed. Returns `undefined` when the prop
+     * is absent or the snapshot carries no `blank` flag, which keeps the control
+     * visible rather than hiding it on a guess.
+     */
+    function useBlankSession(useSession) {
+      if (typeof useSession !== 'function') return undefined
+      try {
+        const snapshot = useSession()
+        return typeof snapshot?.blank === 'boolean' ? snapshot.blank : undefined
+      } catch {
+        return undefined
+      }
+    }
+
     /** A switch rendered as a real button with `role="switch"`. */
     function Switch({ checked, onChange, label }) {
       return h('button', {
@@ -214,8 +232,8 @@ window.__ModuleLoader__.load({
         onClick: () => onChange(!checked),
         style: {
           flex: '0 0 auto', width: 36, height: 20, borderRadius: 999, padding: 2,
-          border: '1px solid ' + (checked ? 'transparent' : 'var(--dsw-alias-border-strong)'),
-          background: checked ? 'var(--dsw-alias-accent-fill, #1f6feb)' : 'transparent',
+          border: '1px solid var(--dsw-alias-border-strong)',
+          background: checked ? 'var(--dsw-alias-accent-fill, #1f6feb)' : 'var(--dsw-alias-bg-sunken, var(--dsw-alias-bg-selected))',
           cursor: 'pointer', display: 'flex', alignItems: 'center',
           justifyContent: checked ? 'flex-end' : 'flex-start',
           transition: 'background 120ms ease',
@@ -224,6 +242,7 @@ window.__ModuleLoader__.load({
         style: {
           width: 14, height: 14, borderRadius: '50%', display: 'block',
           background: checked ? '#fff' : 'var(--dsw-alias-text-tertiary)',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.35)',
         },
       }))
     }
@@ -411,6 +430,17 @@ window.__ModuleLoader__.load({
 
         const sessionId = props.sessionId === undefined ? undefined : String(props.sessionId)
 
+        /**
+         * Whether this Session has not started yet.
+         *
+         * The control belongs to session setup: once a task has begun, its tool
+         * list is already decided and changing it mid-conversation is the exact
+         * surprise this plugin is meant to avoid. `blank` is the Session
+         * snapshot's own "no turn yet" flag, so the control follows the same
+         * boundary the Host applies.
+         */
+        const blank = useBlankSession(props.useSession)
+
         const cwd = useMemo(() => {
           if (sessionId === undefined) return undefined
           for (const workspace of trim.state?.workspaces ?? []) {
@@ -447,6 +477,12 @@ window.__ModuleLoader__.load({
           if (cwd !== undefined) void trim.reload(cwd)
           setOpen(true)
         }
+
+        // `blank === false` means a task has already started, and every hook this
+        // component uses has already run above, so returning here is safe (React
+        // only requires a stable hook count, which earlier versions violated by
+        // returning before later hooks).
+        if (blank === false) return null
 
         return h(React.Fragment, null,
           h('button', {
