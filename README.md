@@ -15,8 +15,6 @@ For a covered layer, each Agent session:
 
 - **loses the hidden tools** from its tool list, so their schemas stop being sent;
 - **loses the hidden skills** from the session skill catalog and the `skill` tool;
-- **loses the hidden instruction files** — the `AGENTS.md` / `CLAUDE.md` sections
-  are cut out of the injected workspace context before the step runs;
 - **keeps everything else** exactly as the profile configured it.
 
 ## Layers
@@ -28,10 +26,9 @@ workspace  >  global
 ```
 
 The sidebar panel edits the **global** default. The control beside the model
-selector edits the **current workspace**. Each category — tools, skills,
-instruction files — resolves on its own: the most specific layer that names any
-entry wins for that category, and a layer replaces the broader list rather than
-adding to it.
+selector edits the **current workspace**. Each category — tools and skills —
+resolves on its own: the most specific layer that names any entry wins for that
+category, and a layer replaces the broader list rather than adding to it.
 
 There is no per-session layer. A session follows the workspace it runs in, so the
 state never diverges from what a fresh session in that folder will get.
@@ -70,9 +67,18 @@ session in that layer.
 ### Patterns
 
 Not required for the switches, but the stored lists accept them: an entry ending
-in `*` is a prefix, so `mcp__github__*` hides every tool from one MCP server. An
-instruction pattern also matches a bare file name at any depth, so `CLAUDE.md`
-hides every `CLAUDE.md` while `web/CLAUDE.md` hides exactly one.
+in `*` is a prefix, so `mcp__github__*` hides every tool from one MCP server.
+
+## Where the composer control appears
+
+The **◧ 工作区能力** control belongs to session setup: it is shown in a Session
+that has not started a task yet, and hidden once one has begun. That is not a
+limitation being papered over — the workspace layer is applied when the Host
+creates the next Agent, so a change made mid-conversation has no moment at which
+it could take effect. Start a new task in that folder to pick up the change.
+
+The sidebar panel is not gated: it edits the global default, which has no such
+timing constraint.
 
 ## Limits
 
@@ -92,8 +98,10 @@ Each was measured on this host, not assumed:
   registered them.
 - **Interface-only plugins stay visible.** A plugin whose only contribution is a
   page or panel has no per-agent seam to unload it.
-- **Instruction pruning is textual.** A section is matched by the path the frame
-  prints, not by reading the file.
+- **Instruction files are out of scope.** Pruning `AGENTS.md` / `CLAUDE.md`
+  sections out of the injected context was built and then removed; the seam no
+  longer produces a shape that can be matched reliably. The `denyInstructions`
+  field remains in the state file so older files still load.
 - **A workspace is keyed by directory path**, matched case-insensitively and
   ignoring trailing separators. Moving the folder detaches its scope.
 
@@ -142,5 +150,5 @@ node --check client.js
 node --test
 ```
 
-`core.js` holds every pure function — matching, path keys, layer resolution,
-instruction-frame pruning — covered by `test/core.test.mjs`.
+`core.js` holds every pure function — matching, path keys, layer resolution —
+covered by `test/core.test.mjs`.

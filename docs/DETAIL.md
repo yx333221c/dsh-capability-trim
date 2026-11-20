@@ -12,16 +12,27 @@ Capability trim is a per-workspace subtraction over that surface. It never adds 
 capability and never enables a plugin: it only removes what a workspace says it
 does not want.
 
-## The three categories
+## The categories
 
 | Category | Effect when hidden | Mechanism |
 |---|---|---|
 | Tools | Removed from the Agent's tool list; the schema is not sent | `agent.ctx.tools.restrict({ deny })` |
 | Skills | Removed from the session skill catalog and the `skill` tool | A scope-local copy with `modelInvocable: false` |
-| Instruction files | The section is cut out of the injected workspace context | `agent/pre-step` rewrites the rendered frame |
 
-All three are applied per Agent, so two Sessions in one process can differ — but
-only by workspace, because there is no session layer.
+Both are applied per Agent, so two Sessions in one process can differ — but only
+by workspace, because there is no session layer.
+
+### Instruction files were removed
+
+An earlier version also pruned `AGENTS.md` / `CLAUDE.md` sections out of the
+injected workspace context by rewriting the `agent/pre-step` frame. That is gone:
+the frame no longer carries the stable `Instructions from: <path>` structure the
+matcher depended on, so pruning silently did nothing while the UI still offered
+switches for it — the worst combination, since the panel claimed a capability the
+Host did not have.
+
+The `denyInstructions` field stays in the stored model so an existing state file
+loads without losing data, but no code path reads it.
 
 ## Layer resolution
 
@@ -75,17 +86,18 @@ so the model would receive an empty skill body, and the entry does not displace
 the provider-sourced one. Both forms were measured on this host; only the copy
 works.
 
-## Instruction pruning
+## Removed: instruction pruning
 
-`dsh-agent-instructions` renders workspace instructions as one
-`<system-reminder>` frame whose body is blocks separated by blank lines, each
-section starting with `Instructions from: <path>` (plus
-`Additional instructions from:` and `Updated instructions from:` for deltas).
+`dsh-agent-instructions` used to render workspace instructions as one
+`<system-reminder>` frame whose body held blocks separated by blank lines, each
+section starting with `Instructions from: <path>`. Capability trim ran on
+`agent/pre-step` after the loader produced that frame and cut matching sections
+out.
 
-Capability trim runs on `agent/pre-step` after the loader has produced that frame,
-and only for messages whose source kind is `agent-instructions`. A section is
-removed when its printed path matches a pattern; everything else — the intro
-paragraph, the surviving sections, the wrapper — is preserved byte for byte.
+That seam no longer yields the shape, so the feature was removed rather than left
+in a state where the panel advertises switches that do nothing. `pruneInstructionFrame`
+and `deniesInstruction` remain in `core.js` as pure, tested functions; nothing in
+the Host or the client calls them.
 
 ## Verified in this installation
 
@@ -111,8 +123,8 @@ Against DSH `0.2.1-rc.2` / Cordis `4.0.5` (Windows, Desktop profile):
 - **A UI-only plugin has no per-agent seam** to unload.
 - **A tool name is not a capability.** Restricting by name hides the schema, not
   the seam.
-- **Instruction pruning is textual.** A file inside a truncated or omitted section
-  cannot be pruned, because it never appeared.
+- **Instruction files are out of scope.** The pruning feature was removed; see
+  above.
 - **Workspace keys follow the directory.** Moving the folder detaches the scope
   until it is re-selected.
 
@@ -130,8 +142,7 @@ layer.
 ## API
 
 `GET /capability-trim/api/state` — state plus the selectable surface (`tools`,
-`skills`, `instructions`); accepts `?workspace=<path>` so skill and instruction
-discovery follow one workspace.
+`skills`); accepts `?workspace=<path>` so skill discovery follows one workspace.
 
 `PUT /capability-trim/api/state` — replaces the whole state:
 `{ global?, workspaces? }`.

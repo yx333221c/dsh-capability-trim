@@ -1,8 +1,8 @@
 {
   "name": "@yx333221c/dsh-capability-trim",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
-  "description": "Trim the model-facing capability surface per session and workspace: hide tools, skills and injected instruction files without touching the profile configuration.",
+  "description": "Trim the model-facing capability surface per workspace: hide tools and skills without touching the profile configuration.",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",

@@ -14,10 +14,22 @@ export const STATE_VERSION = 2
 /** Reserved presentation transport; a scope restriction may not name it. */
 export const RESERVED_TOOL = 'run_code'
 
-/** The three capability categories. */
-export const CATEGORIES = ['tools', 'skills', 'instructions']
+/**
+ * The capability categories this plugin can act on.
+ *
+ * `instructions` is NOT one of them. Instruction-file pruning was removed: it
+ * rewrote the injected workspace context on `agent/pre-step`, and that seam no
+ * longer produces the shape it matched. The `denyInstructions` field survives in
+ * the stored model so an existing state file still loads without loss, but
+ * nothing reads it.
+ */
+export const CATEGORIES = ['tools', 'skills']
 
-/** Instruction section markers this plugin can prune, in rendering order. */
+/**
+ * Instruction section markers, retained for the data model only.
+ *
+ * @deprecated Instruction pruning was removed; kept so old state files parse.
+ */
 export const INSTRUCTION_MARKERS = [
   'Instructions from: ',
   'Additional instructions from: ',
