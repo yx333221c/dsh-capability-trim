@@ -204,24 +204,6 @@ window.__ModuleLoader__.load({
       return useMemo(() => stringsFor(active), [active])
     }
 
-    /**
-     * Whether the current Session has not started a task yet.
-     *
-     * `useSession` is the slot's own selector hook: calling it subscribes this
-     * component, so no extra polling is needed. Returns `undefined` when the prop
-     * is absent or the snapshot carries no `blank` flag, which keeps the control
-     * visible rather than hiding it on a guess.
-     */
-    function useBlankSession(useSession) {
-      if (typeof useSession !== 'function') return undefined
-      try {
-        const snapshot = useSession()
-        return typeof snapshot?.blank === 'boolean' ? snapshot.blank : undefined
-      } catch {
-        return undefined
-      }
-    }
-
     /** A switch rendered as a real button with `role="switch"`. */
     function Switch({ checked, onChange, label }) {
       return h('button', {
@@ -430,17 +412,6 @@ window.__ModuleLoader__.load({
 
         const sessionId = props.sessionId === undefined ? undefined : String(props.sessionId)
 
-        /**
-         * Whether this Session has not started yet.
-         *
-         * The control belongs to session setup: once a task has begun, its tool
-         * list is already decided and changing it mid-conversation is the exact
-         * surprise this plugin is meant to avoid. `blank` is the Session
-         * snapshot's own "no turn yet" flag, so the control follows the same
-         * boundary the Host applies.
-         */
-        const blank = useBlankSession(props.useSession)
-
         const cwd = useMemo(() => {
           if (sessionId === undefined) return undefined
           for (const workspace of trim.state?.workspaces ?? []) {
@@ -478,11 +449,25 @@ window.__ModuleLoader__.load({
           setOpen(true)
         }
 
-        // `blank === false` means a task has already started, and every hook this
-        // component uses has already run above, so returning here is safe (React
-        // only requires a stable hook count, which earlier versions violated by
-        // returning before later hooks).
-        if (blank === false) return null
+        // The control renders for every Session, started or not.
+        //
+        // A previous version hid it once `blank === false`, reading the Session
+        // snapshot through `props.useSession()`. That hook is a selector hook —
+        // `(sel, eq?) => S` — so calling it with no selector made the underlying
+        // `useSyncExternalStoreWithSelector` throw while reading the snapshot.
+        // The throw landed inside a try/catch, but React had already been left
+        // with a broken hook, so it unmounted this Slot occupant for the rest of
+        // the page's life: the button vanished after opening one conversation and
+        // never came back until the app restarted.
+        //
+        // It also hid the wrong thing. Every toggle here writes a WORKSPACE layer,
+        // and that layer is applied when the next Agent is created — so changing
+        // it mid-conversation is meaningful, it simply takes effect on the next
+        // task. Hiding the entry point took that away without preventing anything.
+        //
+        // What actually must stay guarded is the no-workspace case, and it is:
+        // without a resolved directory the trigger renders dimmed and the modal
+        // explains why it cannot edit anything.
 
         return h(React.Fragment, null,
           h('button', {
