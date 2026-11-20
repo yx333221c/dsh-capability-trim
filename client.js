@@ -204,6 +204,33 @@ window.__ModuleLoader__.load({
       return useMemo(() => stringsFor(active), [active])
     }
 
+    /**
+     * Whether the current Session has not started a task yet.
+     *
+     * The slot's `useSession` prop is a SELECTOR hook — `(sel, eq?) => S`, built
+     * by `bindSnapshotSelector` over `useSyncExternalStoreWithSelector` — so it
+     * must be handed a selector. An earlier version called it as `useSession()`,
+     * which passed `undefined` where a selector belongs; the throw happened
+     * inside the store read, React was left with a broken hook, and it unmounted
+     * this Slot occupant for the rest of the page's life.
+     *
+     * `available` is frozen in a lazy initializer so the hook count cannot change
+     * between renders: a conditional call whose condition is stable is safe, one
+     * whose condition can flip is not.
+     *
+     * Returns `undefined` when the flag is unavailable, so an unexpected host
+     * shape leaves the control visible rather than hiding it on a guess.
+     */
+    function useSessionBlank(useSession) {
+      const [available] = useState(() => typeof useSession === 'function')
+      const selector = useCallback(
+        snapshot => (typeof snapshot?.blank === 'boolean' ? snapshot.blank : undefined),
+        [],
+      )
+      if (!available) return undefined
+      return useSession(selector)
+    }
+
     /** A switch rendered as a real button with `role="switch"`. */
     function Switch({ checked, onChange, label }) {
       return h('button', {
@@ -412,6 +439,17 @@ window.__ModuleLoader__.load({
 
         const sessionId = props.sessionId === undefined ? undefined : String(props.sessionId)
 
+        /**
+         * Whether this Session has not started a task yet.
+         *
+         * The control belongs to setup. Every toggle here writes the WORKSPACE
+         * layer, which the Host applies when it next creates an Agent, so while a
+         * conversation is running there is no moment at which a change could take
+         * effect — the control would only offer a switch that does nothing until
+         * the user starts a new task anyway.
+         */
+        const blank = useSessionBlank(props.useSession)
+
         const cwd = useMemo(() => {
           if (sessionId === undefined) return undefined
           for (const workspace of trim.state?.workspaces ?? []) {
@@ -449,25 +487,17 @@ window.__ModuleLoader__.load({
           setOpen(true)
         }
 
-        // The control renders for every Session, started or not.
+        // Hide rather than unmount once a task has started.
         //
-        // A previous version hid it once `blank === false`, reading the Session
-        // snapshot through `props.useSession()`. That hook is a selector hook —
-        // `(sel, eq?) => S` — so calling it with no selector made the underlying
-        // `useSyncExternalStoreWithSelector` throw while reading the snapshot.
-        // The throw landed inside a try/catch, but React had already been left
-        // with a broken hook, so it unmounted this Slot occupant for the rest of
-        // the page's life: the button vanished after opening one conversation and
-        // never came back until the app restarted.
+        // Returning null is what broke this control twice: the first version
+        // returned before later hooks and corrupted the hook order, which unmounts
+        // the Slot occupant for the rest of the page's life. Keeping the component
+        // mounted and flipping `display` cannot reach that failure mode at all,
+        // and the subtree is a single button, so there is nothing to save.
         //
-        // It also hid the wrong thing. Every toggle here writes a WORKSPACE layer,
-        // and that layer is applied when the next Agent is created — so changing
-        // it mid-conversation is meaningful, it simply takes effect on the next
-        // task. Hiding the entry point took that away without preventing anything.
-        //
-        // What actually must stay guarded is the no-workspace case, and it is:
-        // without a resolved directory the trigger renders dimmed and the modal
-        // explains why it cannot edit anything.
+        // `hidden` is only true on an explicit `false`: when the snapshot is
+        // unavailable the control stays visible instead of disappearing on a guess.
+        const hidden = blank === false
 
         return h(React.Fragment, null,
           h('button', {
@@ -475,10 +505,10 @@ window.__ModuleLoader__.load({
             className: ROOT_CLASS,
             title: ready ? strings.openWorkspace : strings.noWorkspace,
             onClick: openModal,
-            style: { ...S.trigger, opacity: ready ? 1 : 0.5 },
+            style: { ...S.trigger, display: hidden ? 'none' : 'inline-flex', opacity: ready ? 1 : 0.5 },
           }, h('span', { 'aria-hidden': true }, '◧'), h('span', null, strings.workspaceShort)),
 
-          open ? h(Modal, {
+          open && !hidden ? h(Modal, {
             title: strings.workspace,
             subtitle: cwd,
             closeLabel: strings.close,
